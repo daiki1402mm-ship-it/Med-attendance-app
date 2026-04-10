@@ -4,9 +4,53 @@ import pandas as pd
 from datetime import date, datetime
 import requests
 import json
+import os
 
-DB_PATH = 'attendance_manager.db'
+# --- 1. 堅牢なパス解決（クラウド環境でのディレクトリ迷子を防ぐ） ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, 'attendance_manager.db')
 
+# --- 2. データベースの初期構築（キャッシュを利用して起動時のみ実行） ---
+@st.cache_resource
+def init_db():
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            
+            # テーブル作成
+            cursor.execute('''CREATE TABLE IF NOT EXISTS subjects (id INTEGER PRIMARY KEY AUTOINCREMENT, subject_name TEXT UNIQUE, target_score INTEGER DEFAULT 60)''')
+            cursor.execute('''CREATE TABLE IF NOT EXISTS attendance (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, period INTEGER, subject_name TEXT, status TEXT)''')
+            cursor.execute('''CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, task_name TEXT, task_date TEXT, task_type TEXT)''')
+            cursor.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''')
+            
+            # 初期データ（科目）
+            subjects = ['小児科学', '整形外科学', '歯科口腔外科学', '泌尿器科学', '老年医学', '耳鼻咽喉科学', '眼科学', '衛生学・公衆衛生学', '産科婦人科学', '皮膚科学', '脳神経外科学', '症候学講義', '人間と医療', '医療と法律', '東洋医学']
+            for sub in subjects:
+                cursor.execute('INSERT OR IGNORE INTO subjects (subject_name) VALUES (?)', (sub,))
+            
+            # 初期データ（主要スケジュール）
+            tasks = [
+                ('CBT本試験(1日目)', '2026-09-24', '試験'), ('CBT本試験(2日目)', '2026-09-25', '試験'),
+                ('OSCE本試験', '2026-10-01', '試験'), ('PreBSL', '2026-12-09', '実習'),
+                ('PreBSL', '2026-12-10', '実習'), ('PreBSL', '2026-12-11', '実習'),
+                ('PreBSL', '2026-12-14', '実習'), ('PreBSL', '2026-12-15', '実習'),
+                ('導入型臨床実習ガイダンス・白衣授与式', '2026-12-18', 'その他')
+            ]
+            for t_name, t_date, t_type in tasks:
+                cursor.execute('SELECT 1 FROM tasks WHERE task_name = ? AND task_date = ?', (t_name, t_date))
+                if not cursor.fetchone():
+                    cursor.execute('INSERT INTO tasks (task_name, task_date, task_type) VALUES (?, ?, ?)', (t_name, t_date, t_type))
+            
+            conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"データベースの初期化に失敗しました: {e}")
+        return False
+
+# 確実な初期化の実行
+db_initialized = init_db()
+
+# --- 3. データベース接続・操作の安全なインターフェース ---
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -14,11 +58,14 @@ def get_db_connection():
 
 def load_settings():
     settings = {}
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT key, value FROM settings")
-        for row in cursor.fetchall():
-            settings[row['key']] = row['value']
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT key, value FROM settings")
+            for row in cursor.fetchall():
+                settings[row['key']] = row['value']
+    except Exception:
+        pass # テーブルが存在しない場合などは無視
     return settings
 
 def save_setting(key, value):
@@ -27,6 +74,7 @@ def save_setting(key, value):
         cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
         conn.commit()
 
+# --- 4. LINE Messaging API 通信処理 ---
 def send_line_message(message, access_token, user_id):
     url = "https://api.line.me/v2/bot/message/push"
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {access_token}"}
@@ -37,14 +85,24 @@ def send_line_message(message, access_token, user_id):
     except Exception as e:
         return False, str(e)
 
+# --- 5. アプリケーションUI（メインロジック） ---
 st.set_page_config(page_title="医学科4年 時間割・出欠管理", layout="wide", initial_sidebar_state="expanded")
 st.title("🩺 医学科4年 時間割・出欠管理アプリ")
 
+# 初期化に失敗している場合はここで停止
+if not db_initialized:
+    st.stop()
+
 menu = st.sidebar.selectbox("メニュー", ["出欠登録", "出席率・成績確認", "試験・提出物管理", "設定 (LINE通知)"])
 
-with get_db_connection() as conn:
-    subjects_df = pd.read_sql_query("SELECT subject_name FROM subjects", conn)
-subject_list = subjects_df['subject_name'].tolist()
+# 科目リストの安全な取得
+try:
+    with get_db_connection() as conn:
+        subjects_df = pd.read_sql_query("SELECT subject_name FROM subjects", conn)
+    subject_list = subjects_df['subject_name'].tolist()
+except Exception as e:
+    st.error("科目データの読み込みに失敗しました。")
+    subject_list = []
 
 if menu == "出欠登録":
     st.header("📝 本日の出欠登録")
@@ -72,39 +130,44 @@ if menu == "出欠登録":
             if not records:
                 st.warning("登録する科目が選択されていません。")
             else:
-                with get_db_connection() as conn:
-                    cursor = conn.cursor()
-                    for rec in records:
-                        cursor.execute("DELETE FROM attendance WHERE date = ? AND period = ?", (rec[0], rec[1]))
-                        cursor.execute("INSERT INTO attendance (date, period, subject_name, status) VALUES (?, ?, ?, ?)", rec)
-                    conn.commit()
-                
-                # ★ご褒美システム1：風船を飛ばす
-                st.success("出欠を保存しました！")
-                st.balloons()
-                
-                # ★ご褒美システム2：金曜日ならLINEに労いメッセージを送信
-                if selected_date.weekday() == 4:
-                    settings = load_settings()
-                    token = settings.get('LINE_TOKEN', '')
-                    uid = settings.get('LINE_USER_ID', '')
-                    if token and uid:
-                        reward_msg = "【💮1週間お疲れ様！】\n今週の講義も無事終了！よく頑張りました。\n週末はカルカソンヌでもプレイして、しっかりリフレッシュしてね🎲"
-                        send_line_message(reward_msg, token, uid)
+                try:
+                    with get_db_connection() as conn:
+                        cursor = conn.cursor()
+                        for rec in records:
+                            cursor.execute("DELETE FROM attendance WHERE date = ? AND period = ?", (rec[0], rec[1]))
+                            cursor.execute("INSERT INTO attendance (date, period, subject_name, status) VALUES (?, ?, ?, ?)", rec)
+                        conn.commit()
+                    
+                    st.success("出欠を保存しました！")
+                    st.balloons()
+                    
+                    # 金曜日のご褒美処理
+                    if selected_date.weekday() == 4:
+                        settings = load_settings()
+                        token = settings.get('LINE_TOKEN', '')
+                        uid = settings.get('LINE_USER_ID', '')
+                        if token and uid:
+                            reward_msg = "【💮1週間お疲れ様！】\n今週の講義も無事終了！よく頑張りました。\n週末はカルカソンヌでもプレイして、しっかりリフレッシュしてね🎲"
+                            send_line_message(reward_msg, token, uid)
+                except Exception as e:
+                    st.error(f"保存中にエラーが発生しました: {e}")
 
 elif menu == "出席率・成績確認":
     st.header("📊 出席率・単位取得判定")
     st.info("💡 条件: 休講を除外した全実施回数の2/3（66.7%）以上出席 ＆ 試験60点以上")
-    with get_db_connection() as conn:
-        query = """SELECT subject_name as "科目名", COUNT(CASE WHEN status != '休講' THEN 1 END) as "実施回数(分母)", COUNT(CASE WHEN status = '出席' THEN 1 END) as "出席回数", COUNT(CASE WHEN status = '欠席' THEN 1 END) as "欠席回数", COUNT(CASE WHEN status = '休講' THEN 1 END) as "休講回数" FROM attendance GROUP BY subject_name"""
-        df_att = pd.read_sql_query(query, conn)
-    
-    if not df_att.empty:
-        df_att['出席率(%)'] = df_att.apply(lambda row: round((row['出席回数'] / row['実施回数(分母)'] * 100), 1) if row['実施回数(分母)'] > 0 else 0.0, axis=1)
-        df_att['判定(出席)'] = df_att['出席率(%)'].apply(lambda x: '🟢 クリア' if x >= 66.7 else '🔴 要注意')
-        st.dataframe(df_att.sort_values('出席率(%)', ascending=True), use_container_width=True, hide_index=True)
-    else:
-        st.write("まだ出欠データが登録されていません。")
+    try:
+        with get_db_connection() as conn:
+            query = """SELECT subject_name as "科目名", COUNT(CASE WHEN status != '休講' THEN 1 END) as "実施回数(分母)", COUNT(CASE WHEN status = '出席' THEN 1 END) as "出席回数", COUNT(CASE WHEN status = '欠席' THEN 1 END) as "欠席回数", COUNT(CASE WHEN status = '休講' THEN 1 END) as "休講回数" FROM attendance GROUP BY subject_name"""
+            df_att = pd.read_sql_query(query, conn)
+        
+        if not df_att.empty and df_att['科目名'].notna().any():
+            df_att['出席率(%)'] = df_att.apply(lambda row: round((row['出席回数'] / row['実施回数(分母)'] * 100), 1) if row['実施回数(分母)'] > 0 else 0.0, axis=1)
+            df_att['判定(出席)'] = df_att['出席率(%)'].apply(lambda x: '🟢 クリア' if x >= 66.7 else '🔴 要注意')
+            st.dataframe(df_att.sort_values('出席率(%)', ascending=True), use_container_width=True, hide_index=True)
+        else:
+            st.write("まだ出欠データが登録されていません。")
+    except Exception as e:
+        st.error(f"データの集計中にエラーが発生しました: {e}")
 
 elif menu == "試験・提出物管理":
     st.header("⏳ 試験・提出物カウンター")
@@ -127,20 +190,23 @@ elif menu == "試験・提出物管理":
     st.markdown("---")
     st.subheader("今後のスケジュール")
     today = date.today()
-    with get_db_connection() as conn:
-        df_tasks = pd.read_sql_query("SELECT id, task_name, task_date, task_type FROM tasks ORDER BY task_date", conn)
-    if not df_tasks.empty:
-        for index, row in df_tasks.iterrows():
-            target_date = datetime.strptime(row['task_date'], '%Y-%m-%d').date()
-            delta = (target_date - today).days
-            if delta > 0:
-                st.info(f"📅 **{row['task_name']}** ({row['task_type']}) \n\n期日: {row['task_date']} ➡ **あと {delta} 日**")
-            elif delta == 0:
-                st.error(f"🚨 **{row['task_name']}** ({row['task_type']}) は **本日** です！")
-            else:
-                st.write(f"✅ ~~{row['task_name']} (終了: {row['task_date']})~~")
-    else:
-        st.write("予定されているタスクはありません。")
+    try:
+        with get_db_connection() as conn:
+            df_tasks = pd.read_sql_query("SELECT id, task_name, task_date, task_type FROM tasks ORDER BY task_date", conn)
+        if not df_tasks.empty:
+            for index, row in df_tasks.iterrows():
+                target_date = datetime.strptime(row['task_date'], '%Y-%m-%d').date()
+                delta = (target_date - today).days
+                if delta > 0:
+                    st.info(f"📅 **{row['task_name']}** ({row['task_type']}) \n\n期日: {row['task_date']} ➡ **あと {delta} 日**")
+                elif delta == 0:
+                    st.error(f"🚨 **{row['task_name']}** ({row['task_type']}) は **本日** です！")
+                else:
+                    st.write(f"✅ ~~{row['task_name']} (終了: {row['task_date']})~~")
+        else:
+            st.write("予定されているタスクはありません。")
+    except Exception as e:
+        st.error("スケジュールの読み込みに失敗しました。")
 
 elif menu == "設定 (LINE通知)":
     st.header("⚙️ LINE Messaging API 設定")
@@ -159,7 +225,8 @@ elif menu == "設定 (LINE通知)":
         token = current_settings.get('LINE_TOKEN', '')
         uid = current_settings.get('LINE_USER_ID', '')
         if token and uid:
-            success, msg = send_line_message("【出席管理アプリ】設定完了！\nシステムとの連携が正常に行われました。", token, uid)
+            with st.spinner("送信中..."):
+                success, msg = send_line_message("【出席管理アプリ】設定完了！\nシステムとの連携が正常に行われました。", token, uid)
             if success:
                 st.success("LINEにテストメッセージを送信しました！スマホを確認してください。")
             else:

@@ -5,122 +5,106 @@ from datetime import datetime, timedelta
 import pytz
 import pandas as pd
 
-# 1. データベース接続設定
 def get_connection():
     return psycopg2.connect(st.secrets["SUPABASE_URI"])
 
 st.set_page_config(page_title="医学生専用ダッシュボード", layout="wide")
 
-# サイドバー：出欠統計
-def show_sidebar_stats(cur):
-    st.sidebar.title("📊 出欠統計")
-    cur.execute("""
-        SELECT subject_name, 
-               COUNT(*) as total, 
-               COUNT(CASE WHEN status = '欠席' THEN 1 END) as absences 
-        FROM attendance 
-        WHERE status IN ('予定', '出席', '欠席')
-        GROUP BY subject_name
-    """)
-    stats = cur.fetchall()
-    if stats:
-        for s in stats:
-            max_abs = s['total'] // 3
-            remaining = max_abs - s['absences']
-            st.sidebar.write(f"**{s['subject_name']}**")
-            color = "red" if remaining <= 1 else "green"
-            # 💡 ここを修正しました
-            st.sidebar.markdown(
-                f"欠席: {s['absences']} / 可: {max_abs} (残り <span style='color:{color}; font-weight:bold;'>{remaining}</span>)", 
-                unsafe_allow_html=True, 
-                help="1/3以上欠席で留年リーチ"
-            )
-            st.sidebar.progress(min(s['absences'] / max(max_abs, 1), 1.0))
-    else:
-        st.sidebar.info("統計データがありません")
-
-# メインコンテンツ
-st.title("👨‍⚕️ 医学生専用ダッシュボード")
-
 try:
     conn = get_connection()
     cur = conn.cursor(cursor_factory=DictCursor)
 
-    # サイドバー表示
-    show_sidebar_stats(cur)
+    # --- サイドバー：設定と統計 ---
+    st.sidebar.title("⚙️ 設定・統計")
+    
+    # CBT日程の設定
+    cur.execute("SELECT value FROM settings WHERE key = 'cbt_date'")
+    cbt_res = cur.fetchone()
+    current_cbt = datetime.strptime(cbt_res['value'], '%Y-%m-%d').date() if cbt_res else datetime.now().date()
+    
+    new_cbt = st.sidebar.date_input("CBT試験日を設定", value=current_cbt)
+    if new_cbt != current_cbt:
+        cur.execute("INSERT INTO settings (key, value) VALUES ('cbt_date', %s) ON CONFLICT (key) DO UPDATE SET value = %s", (new_cbt.isoformat(), new_cbt.isoformat()))
+        conn.commit()
+        st.rerun()
 
-    # タブで表示を切り替え
-    tab1, tab2, tab3 = st.tabs(["🗓 本日の講義", "📝 提出物", "⚖️ 試験日程"])
+    # 出欠統計
+    st.sidebar.divider()
+    st.sidebar.subheader("📊 出欠統計")
+    cur.execute("""
+        SELECT subject_name, COUNT(*) as total, 
+               COUNT(CASE WHEN status = '欠席' THEN 1 END) as absences 
+        FROM attendance WHERE status IN ('予定', '出席', '欠席')
+        GROUP BY subject_name
+    """)
+    stats = cur.fetchall()
+    for s in stats:
+        max_abs = s['total'] // 3
+        rem = max_abs - s['absences']
+        st.sidebar.write(f"**{s['subject_name']}**")
+        st.sidebar.markdown(f"欠席: {s['absences']} / 可: {max_abs} (残り: **{rem}**)", unsafe_allow_html=True)
+        st.sidebar.progress(min(s['absences'] / max(max_abs, 1), 1.0))
 
+    # --- メイン画面 ---
     now = datetime.now(pytz.timezone('Asia/Tokyo'))
     today = now.date()
+    
+    # 🏆 CBTカウントダウン (最上部に大きく表示)
+    days_to_cbt = (new_cbt - today).days
+    col_title, col_count = st.columns([2, 1])
+    with col_title:
+        st.title("👨‍⚕️ 医学生専用ダッシュボード")
+    with col_count:
+        if days_to_cbt >= 0:
+            st.metric(label="⚔️ CBTまであと", value=f"{days_to_cbt} 日")
+        else:
+            st.success("🎉 CBTお疲れ様でした！")
 
-    # --- タブ1: 本日の講義 ---
+    st.divider()
+
+    # タブ表示
+    tab1, tab2, tab3 = st.tabs(["🗓 本日の講義", "📝 提出物", "⚖️ 試験日程"])
+
     with tab1:
+        # (講義表示ロジック：以前と同様)
         selected_date = st.date_input("表示日を選択", value=today)
-        target_date_str = selected_date.strftime('%Y-%m-%d')
-        
-        cur.execute("SELECT * FROM attendance WHERE date = %s ORDER BY period ASC", (target_date_str,))
+        cur.execute("SELECT * FROM attendance WHERE date = %s ORDER BY period ASC", (selected_date.isoformat(),))
         lectures = cur.fetchall()
-
-        if not lectures:
-            st.info("講義予定はありません。")
+        if not lectures: st.info("講義予定なし")
         else:
             for l in lectures:
-                col1, col2, col3 = st.columns([1, 2, 4])
-                col1.write(f"**{l['period']}限**")
-                col2.write(f"**{l['subject_name']}** ({l['status']})")
-                
-                b_cols = col3.columns(3)
-                if b_cols[0].button("出席", key=f"att_{l['id']}"):
-                    cur.execute("UPDATE attendance SET status = '出席' WHERE id = %s", (l['id'],))
-                    conn.commit()
-                    st.rerun()
-                if b_cols[1].button("欠席", key=f"abs_{l['id']}"):
-                    cur.execute("UPDATE attendance SET status = '欠席' WHERE id = %s", (l['id'],))
-                    conn.commit()
-                    st.rerun()
-                if b_cols[2].button("休講", key=f"can_{l['id']}"):
-                    cur.execute("UPDATE attendance SET status = '休講' WHERE id = %s", (l['id'],))
-                    conn.commit()
-                    st.rerun()
+                c1, c2, c3 = st.columns([1, 2, 4])
+                c1.write(f"**{l['period']}限**")
+                c2.write(f"**{l['subject_name']}** ({l['status']})")
+                b = c3.columns(3)
+                if b[0].button("出席", key=f"at_{l['id']}"):
+                    cur.execute("UPDATE attendance SET status = '出席' WHERE id = %s", (l['id'],)); conn.commit(); st.rerun()
+                if b[1].button("欠席", key=f"ab_{l['id']}"):
+                    cur.execute("UPDATE attendance SET status = '欠席' WHERE id = %s", (l['id'],)); conn.commit(); st.rerun()
+                if b[2].button("休講", key=f"ca_{l['id']}"):
+                    cur.execute("UPDATE attendance SET status = '休講' WHERE id = %s", (l['id'],)); conn.commit(); st.rerun()
 
-    # --- タブ2: 提出物 ---
     with tab2:
-        st.subheader("未完了の提出物")
+        # (提出物表示ロジック：以前と同様)
         cur.execute("SELECT * FROM assignments WHERE is_completed = FALSE ORDER BY deadline ASC")
-        assignments = cur.fetchall()
-        
-        if not assignments:
-            st.success("全ての課題が完了しています！")
-        else:
-            for a in assignments:
-                col1, col2, col3 = st.columns([2, 4, 1])
-                days_left = (a['deadline'] - today).days
-                
-                # 期限に応じたバッジ
-                if days_left <= 3:
-                    col1.error(f"あと {days_left} 日")
-                else:
-                    col1.warning(f"あと {days_left} 日")
-                
-                col2.write(f"**{a['subject_name']}** : {a['content']}")
-                if col3.button("完了", key=f"comp_{a['id']}"):
-                    cur.execute("UPDATE assignments SET is_completed = TRUE WHERE id = %s", (a['id'],))
-                    conn.commit()
-                    st.rerun()
+        for a in cur.fetchall():
+            c1, c2, c3 = st.columns([2, 4, 1])
+            dl_days = (a['deadline'] - today).days
+            if dl_days <= 3: c1.error(f"あと {dl_days} 日")
+            else: c1.warning(f"あと {dl_days} 日")
+            col2_text = f"**{a['subject_name']}** : {a['content']}"
+            if a['remind_date']: col2_text += f" (⏰ {a['remind_date'].strftime('%m/%d')}通知)"
+            c2.write(col2_text)
+            if c3.button("完了", key=f"cp_{a['id']}"):
+                cur.execute("UPDATE assignments SET is_completed = TRUE WHERE id = %s", (a['id'],)); conn.commit(); st.rerun()
 
-    # --- タブ3: 試験日程 ---
     with tab3:
-        st.subheader("直近の試験日程")
-        cur.execute("SELECT * FROM exams WHERE exam_date >= %s ORDER BY exam_date ASC", (today,))
+        # (試験日程表示ロジック：以前と同様)
+        cur.execute("SELECT * FROM exams WHERE exam_date >= %s ORDER BY exam_date ASC", (today.isoformat(),))
         exams = cur.fetchall()
-        
-        if not exams:
-            st.info("現在予定されている試験はありません。")
-        else:
-            df_exams = pd.DataFrame([dict(e) for e in exams])
-            st.table(df_exams[['exam_date', 'exam_time', 'subject_name', 'location']])
+        if exams:
+            st.table(pd.DataFrame([dict(e) for e in exams])[['exam_date', 'exam_time', 'subject_name', 'location']])
+        else: st.info("試験予定なし")
 
     cur.close()
     conn.close()

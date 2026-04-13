@@ -1,89 +1,124 @@
 import streamlit as st
 import psycopg2
 from psycopg2.extras import DictCursor
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
+import pandas as pd
 
 # 1. データベース接続設定
 def get_connection():
-    # StreamlitのSecrets管理に保存したSUPABASE_URIを使用
     return psycopg2.connect(st.secrets["SUPABASE_URI"])
 
-st.set_page_config(page_title="スマート出欠管理システム", layout="centered")
-st.title("📅 出欠管理ダッシュボード")
+st.set_page_config(page_title="医学生専用ダッシュボード", layout="wide")
 
-# 2. 日付選択機能
-st.subheader("表示する日付を選択")
-now = datetime.now(pytz.timezone('Asia/Tokyo'))
-selected_date = st.date_input(
-    "日付を選択してください",
-    value=now.date(),
-    help="過去の修正や未来の予定確認が可能です。"
-)
+# サイドバー：出欠統計
+def show_sidebar_stats(cur):
+    st.sidebar.title("📊 出欠統計")
+    cur.execute("""
+        SELECT subject_name, 
+               COUNT(*) as total, 
+               COUNT(CASE WHEN status = '欠席' THEN 1 END) as absences 
+        FROM attendance 
+        WHERE status IN ('予定', '出席', '欠席')
+        GROUP BY subject_name
+    """)
+    stats = cur.fetchall()
+    if stats:
+        for s in stats:
+            max_abs = s['total'] // 3
+            remaining = max_abs - s['absences']
+            st.sidebar.write(f"**{s['subject_name']}**")
+            color = "red" if remaining <= 1 else "green"
+            st.sidebar.markdown(f"欠席: {s['absences']} / 可: {max_abs} (残り <span style='color:{color}; font-weight:bold;'>{remaining}</span>)", unsafe_url_encoded=True, help="1/3以上欠席で留年リーチ")
+            st.sidebar.progress(min(s['absences'] / max(max_abs, 1), 1.0))
+    else:
+        st.sidebar.info("統計データがありません")
 
-target_date_str = selected_date.strftime('%Y-%m-%d')
-display_date = selected_date.strftime('%m月%d日')
+# メインコンテンツ
+st.title("👨‍⚕️ 医学生専用ダッシュボード")
 
-# 3. スケジュール取得と表示
 try:
     conn = get_connection()
     cur = conn.cursor(cursor_factory=DictCursor)
 
-    # 選択された日の講義を取得
-    cur.execute(
-        "SELECT id, period, subject_name, status FROM attendance WHERE date = %s ORDER BY period ASC",
-        (target_date_str,)
-    )
-    lectures = cur.fetchall()
+    # サイドバー表示
+    show_sidebar_stats(cur)
 
-    st.write(f"### {display_date} のスケジュール")
+    # タブで表示を切り替え
+    tab1, tab2, tab3 = st.tabs(["🗓 本日の講義", "📝 提出物", "⚖️ 試験日程"])
 
-    if not lectures:
-        st.info(f"{display_date} の講義予定は登録されていません。")
-    else:
-        for lecture in lectures:
-            # 1行を3つのカラムに分割して表示
-            col1, col2, col3 = st.columns([1, 2, 4])
-            
-            with col1:
-                st.write(f"**{lecture['period']}限**")
-            
-            with col2:
-                st.write(f"**{lecture['subject_name']}**")
-                # 現在のステータスを表示
-                status = lecture['status']
-                if status == '出席':
-                    st.success(status)
-                elif status == '欠席':
-                    st.error(status)
-                elif status == '休講':
-                    st.warning(status)
+    now = datetime.now(pytz.timezone('Asia/Tokyo'))
+    today = now.date()
+
+    # --- タブ1: 本日の講義 ---
+    with tab1:
+        selected_date = st.date_input("表示日を選択", value=today)
+        target_date_str = selected_date.strftime('%Y-%m-%d')
+        
+        cur.execute("SELECT * FROM attendance WHERE date = %s ORDER BY period ASC", (target_date_str,))
+        lectures = cur.fetchall()
+
+        if not lectures:
+            st.info("講義予定はありません。")
+        else:
+            for l in lectures:
+                col1, col2, col3 = st.columns([1, 2, 4])
+                col1.write(f"**{l['period']}限**")
+                col2.write(f"**{l['subject_name']}** ({l['status']})")
+                
+                b_cols = col3.columns(3)
+                if b_cols[0].button("出席", key=f"att_{l['id']}"):
+                    cur.execute("UPDATE attendance SET status = '出席' WHERE id = %s", (l['id'],))
+                    conn.commit()
+                    st.rerun()
+                if b_cols[1].button("欠席", key=f"abs_{l['id']}"):
+                    cur.execute("UPDATE attendance SET status = '欠席' WHERE id = %s", (l['id'],))
+                    conn.commit()
+                    st.rerun()
+                if b_cols[2].button("休講", key=f"can_{l['id']}"):
+                    cur.execute("UPDATE attendance SET status = '休講' WHERE id = %s", (l['id'],))
+                    conn.commit()
+                    st.rerun()
+
+    # --- タブ2: 提出物 ---
+    with tab2:
+        st.subheader("未完了の提出物")
+        cur.execute("SELECT * FROM assignments WHERE is_completed = FALSE ORDER BY deadline ASC")
+        assignments = cur.fetchall()
+        
+        if not assignments:
+            st.success("全ての課題が完了しています！")
+        else:
+            for a in assignments:
+                col1, col2, col3 = st.columns([2, 4, 1])
+                days_left = (a['deadline'] - today).days
+                
+                # 期限に応じたバッジ
+                if days_left <= 3:
+                    col1.error(f"あと {days_left} 日")
                 else:
-                    st.info("未登録")
+                    col1.warning(f"あと {days_left} 日")
+                
+                col2.write(f"**{a['subject_name']}** : {a['content']}")
+                if col3.button("完了", key=f"comp_{a['id']}"):
+                    cur.execute("UPDATE assignments SET is_completed = TRUE WHERE id = %s", (a['id'],))
+                    conn.commit()
+                    st.rerun()
 
-            with col3:
-                # 更新ボタン
-                b_cols = st.columns(3)
-                if b_cols[0].button("出席", key=f"att_{lecture['id']}"):
-                    cur.execute("UPDATE attendance SET status = '出席' WHERE id = %s", (lecture['id'],))
-                    conn.commit()
-                    st.rerun()
-                
-                if b_cols[1].button("欠席", key=f"abs_{lecture['id']}"):
-                    cur.execute("UPDATE attendance SET status = '欠席' WHERE id = %s", (lecture['id'],))
-                    conn.commit()
-                    st.rerun()
-                
-                if b_cols[2].button("休講", key=f"can_{lecture['id']}"):
-                    cur.execute("UPDATE attendance SET status = '休講' WHERE id = %s", (lecture['id'],))
-                    conn.commit()
-                    st.rerun()
-            st.divider()
+    # --- タブ3: 試験日程 ---
+    with tab3:
+        st.subheader("直近の試験日程")
+        cur.execute("SELECT * FROM exams WHERE exam_date >= %s ORDER BY exam_date ASC", (today,))
+        exams = cur.fetchall()
+        
+        if not exams:
+            st.info("現在予定されている試験はありません。")
+        else:
+            df_exams = pd.DataFrame([dict(e) for e in exams])
+            st.table(df_exams[['exam_date', 'exam_time', 'subject_name', 'location']])
 
     cur.close()
     conn.close()
 
 except Exception as e:
-    st.error(f"データベース接続エラー: {e}")
-
-# 4. (任意) 統計情報や一括登録機能などをここに配置
+    st.error(f"エラーが発生しました: {e}")

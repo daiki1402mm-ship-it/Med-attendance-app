@@ -30,10 +30,10 @@ try:
         conn.commit()
         st.rerun()
 
-    # --- 出欠統計（修正版：実習・休講対応） ---
+    # --- 出欠統計（修正版：実習・休講・医学祭対応） ---
     st.sidebar.divider()
     st.sidebar.subheader("📊 出欠統計")
-    # SQLで「休講」「休み」を統計から除外して取得
+    # SQLで「休講」「休み」「祭」を統計から除外して取得
     cur.execute("""
         SELECT subject_name, 
                COUNT(*) as total, 
@@ -42,6 +42,7 @@ try:
         WHERE status IN ('予定', '出席', '欠席') 
           AND subject_name NOT LIKE '%休講%'
           AND subject_name NOT LIKE '%休み%'
+          AND subject_name NOT LIKE '%祭%'
         GROUP BY subject_name
     """)
     stats = cur.fetchall()
@@ -50,7 +51,7 @@ try:
         for s in stats:
             subject = s['subject_name']
             
-            # 💡 「実習」が含まれる場合は欠席可能回数を0にする
+            # 「実習」が含まれる場合は欠席可能回数を0にする
             if "実習" in subject:
                 max_abs = 0
             else:
@@ -70,7 +71,7 @@ try:
                 unsafe_allow_html=True
             )
             
-            # プログレスバー（分母0エラー回避）
+            # プログレスバー
             if max_abs == 0:
                 progress_val = 1.0 if s['absences'] > 0 else 0.0
             else:
@@ -106,7 +107,7 @@ try:
         lectures = cur.fetchall()
         if not lectures: st.info("講義予定なし")
         else:
-            # 空きコマ判定（休講や休みを除外して判定）
+            # 空きコマ判定（休講、休み、祭を除外）
             occ = {str(r['period']) for r in lectures if r['status'] not in ['休講', '欠席'] and not any(k in r['subject_name'] for k in ["休み", "休講", "祭"])}
             empty = [p for p in range(1, 7) if str(p) not in occ]
             if empty:
@@ -148,7 +149,7 @@ try:
 
     # --- タブ4: 予定を一括登録 ---
     with tab4:
-        st.subheader("🚀 6月分の予定を一気に流し込む")
+        st.subheader("🚀 予定を一気に流し込む")
         bulk_text = st.text_area("予定リストをペースト (例: 6/1 1 小児科)", height=300)
         
         if st.button("一括登録を実行", type="primary"):

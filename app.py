@@ -29,7 +29,12 @@ def show_sidebar_stats(cur):
             remaining = max_abs - s['absences']
             st.sidebar.write(f"**{s['subject_name']}**")
             color = "red" if remaining <= 1 else "green"
-            st.sidebar.markdown(f"欠席: {s['absences']} / 可: {max_abs} (残り <span style='color:{color}; font-weight:bold;'>{remaining}</span>)", unsafe_url_encoded=True, help="1/3以上欠席で留年リーチ")
+            # 💡 ここを修正しました
+            st.sidebar.markdown(
+                f"欠席: {s['absences']} / 可: {max_abs} (残り <span style='color:{color}; font-weight:bold;'>{remaining}</span>)", 
+                unsafe_allow_html=True, 
+                help="1/3以上欠席で留年リーチ"
+            )
             st.sidebar.progress(min(s['absences'] / max(max_abs, 1), 1.0))
     else:
         st.sidebar.info("統計データがありません")

@@ -1,7 +1,7 @@
 import streamlit as st
 import psycopg2
 from psycopg2.extras import DictCursor
-from datetime import datetime, timedelta
+from datetime import datetime, date, timedelta # 💡 date を追加しました
 import pytz
 import pandas as pd
 import re
@@ -75,6 +75,12 @@ try:
         lectures = cur.fetchall()
         if not lectures: st.info("講義予定なし")
         else:
+            # 💡 空きコマ判定ロジックを強化（「休講」という科目名も空きとして扱う）
+            occ = {str(r['period']) for r in lectures if r['status'] not in ['休講', '欠席'] and not any(k in r['subject_name'] for k in ["休み", "休講", "祭"])}
+            empty = [p for p in range(1, 7) if str(p) not in occ]
+            if empty:
+                st.write(f"💡 空きコマ: {', '.join(map(str, empty))}限")
+
             for l in lectures:
                 c1, c2, c3 = st.columns([1, 2, 4])
                 c1.write(f"**{l['period']}限**")
@@ -111,47 +117,37 @@ try:
 
     # --- タブ4: 予定を一括登録 ---
     with tab4:
-        st.subheader("🚀 6月分の予定などを一気に流し込む")
-        st.markdown("""
-        下のエリアに予定を貼り付けて「一括登録」を押してください。
-        **形式例:** `6/1 1限 解剖学` (スペース区切り)
-        """)
-        
-        bulk_text = st.text_area("予定リストをペースト", height=300, placeholder="6/1 1 解剖学\n6/1 2 解剖学\n6/2 1 生理学...")
+        st.subheader("🚀 6月分の予定を一気に流し込む")
+        bulk_text = st.text_area("予定リストをペースト (例: 6/1 1 小児科)", height=300)
         
         if st.button("一括登録を実行", type="primary"):
             if bulk_text:
                 lines = bulk_text.strip().split('\n')
                 success_count = 0
                 error_lines = []
-                
                 for line in lines:
                     try:
-                        # 日付、時限、科目を解析
                         match = re.search(r'(\d+)[/月](\d+)日?\s*(\d+)限?\s*(.+)', line)
                         if match:
                             m, d, p, s = match.groups()
-                            # 2026年として処理
+                            # 💡 date(2026, int(m), int(d)) が使えるようになりました
                             t_date = date(2026, int(m), int(d))
                             cur.execute(
                                 "INSERT INTO attendance (date, period, subject_name, status) VALUES (%s, %s, %s, '予定')",
                                 (t_date.isoformat(), int(p), s.strip())
                             )
                             success_count += 1
-                        else:
-                            error_lines.append(line)
-                    except Exception as e:
-                        error_lines.append(f"{line} (エラー: {e})")
+                        else: error_lines.append(line)
+                    except Exception as e: error_lines.append(f"{line} (エラー: {e})")
                 
                 conn.commit()
                 if success_count > 0:
                     st.success(f"✅ {success_count}件の登録に成功しました！")
                     st.rerun()
                 if error_lines:
-                    st.error("以下の行は登録できませんでした（形式を確認してください）")
+                    st.error("登録失敗:")
                     for el in error_lines: st.text(el)
-            else:
-                st.warning("テキストを入力してください。")
+            else: st.warning("テキストを入力してください。")
 
     cur.close()
     conn.close()

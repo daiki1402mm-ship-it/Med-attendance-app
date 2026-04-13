@@ -15,36 +15,62 @@ try:
     conn = get_connection()
     cur = conn.cursor(cursor_factory=DictCursor)
 
-    # --- サイドバー：CBT設定と統計 ---
+    # --- サイドバー：管理パネル ---
     st.sidebar.title("⚙️ 管理パネル")
+    
+    # CBT設定
     cur.execute("SELECT value FROM settings WHERE key = 'cbt_date'")
     cbt_res = cur.fetchone()
     current_cbt = datetime.strptime(cbt_res['value'], '%Y-%m-%d').date() if cbt_res else datetime.now().date()
-    
     new_cbt = st.sidebar.date_input("CBT試験日", value=current_cbt)
     if new_cbt != current_cbt:
         cur.execute("INSERT INTO settings (key, value) VALUES ('cbt_date', %s) ON CONFLICT (key) DO UPDATE SET value = %s", (new_cbt.isoformat(), new_cbt.isoformat()))
         conn.commit()
         st.rerun()
 
-    # 出欠統計（講義のみ）
+    # --- 📊 単位アラート（統計機能強化） ---
     st.sidebar.divider()
-    st.sidebar.subheader("📊 単位アラート")
+    st.sidebar.subheader("📊 単位・出席状況")
+    
     cur.execute("""
-        SELECT subject_name, COUNT(*) as total, 
+        SELECT subject_name, 
+               COUNT(*) as total, 
+               COUNT(CASE WHEN status = '出席' THEN 1 END) as attended,
                COUNT(CASE WHEN status = '欠席' THEN 1 END) as absences 
         FROM attendance 
         WHERE status IN ('予定', '出席', '欠席') 
           AND subject_name NOT LIKE '%休講%' 
           AND subject_name NOT LIKE '%休み%'
+          AND subject_name NOT LIKE '%祭%'
         GROUP BY subject_name
     """)
+    
     for s in cur.fetchall():
-        max_abs = 0 if "実習" in s['subject_name'] else s['total'] // 3
+        subject = s['subject_name']
+        max_abs = 0 if "実習" in subject else s['total'] // 3
         rem = max_abs - s['absences']
-        color = "red" if rem <= 1 else "white"
-        st.sidebar.markdown(f"**{s['subject_name']}** (残り: <span style='color:{color};'>{rem}</span>)", unsafe_allow_html=True)
-        st.sidebar.progress(min(s['absences'] / max_abs, 1.0) if max_abs > 0 else 0.0)
+        attended = s['attended']
+        
+        # 🎨 残り欠席可能数に応じた色判定
+        if rem <= 0:
+            color = "#A020F0" # 紫色 (0以下)
+        elif rem < 2:
+            color = "#FF4B4B" # 赤色 (2未満)
+        elif rem < 4:
+            color = "#FFD700" # 黄色 (4未満)
+        else:
+            color = "#FFFFFF" # 白色 (通常)
+            
+        st.sidebar.markdown(f"**{subject}**")
+        st.sidebar.markdown(
+            f"出席総数: **{attended}** 回<br>"
+            f"欠席: {s['absences']} / 可: {max_abs} "
+            f"(残り: <span style='color:{color}; font-weight:bold;'>{rem}</span>)", 
+            unsafe_allow_html=True
+        )
+        # プログレスバーも欠席数に合わせて表示
+        progress_val = min(s['absences'] / max_abs, 1.0) if max_abs > 0 else 0.0
+        st.sidebar.progress(progress_val)
 
     # --- メイン画面 ---
     jst = pytz.timezone('Asia/Tokyo')
@@ -59,11 +85,9 @@ try:
     st.divider()
     tab1, tab2, tab3 = st.tabs(["🗓 本日の予定", "📝 提出物", "⚖️ 試験日程"])
 
-    # --- タブ1: 本日の予定（統合表示） ---
     with tab1:
         view_date = st.date_input("表示日", value=today)
         
-        # データの取得
         cur.execute("SELECT * FROM attendance WHERE date = %s ORDER BY period ASC", (view_date.isoformat(),))
         lectures = cur.fetchall()
         cur.execute("SELECT * FROM lifestyle_schedules WHERE event_date = %s ORDER BY start_time ASC", (view_date.isoformat(),))
@@ -72,7 +96,6 @@ try:
         if not lectures and not lifestyle:
             st.info("予定はありません。ゆっくり休みましょう！🍵")
         else:
-            # 1. 大学の講義
             if lectures:
                 st.subheader("📚 大学の講義")
                 for l in lectures:
@@ -87,7 +110,6 @@ try:
                     if btn_cols[2].button("休", key=f"ca_{l['id']}"):
                         cur.execute("UPDATE attendance SET status = '休講' WHERE id = %s", (l['id'],)); conn.commit(); st.rerun()
 
-            # 2. 私生活（バイト・部活）
             if lifestyle:
                 st.divider()
                 st.subheader("🏠 プライベート・活動")
@@ -95,8 +117,6 @@ try:
                     c1, c2, c3 = st.columns([1, 3, 2])
                     start = item['start_time'].strftime('%H:%M') if item['start_time'] else "未定"
                     end = f"〜{item['end_time'].strftime('%H:%M')}" if item['end_time'] else ""
-                    
-                    # カテゴリ別アイコン
                     icon = "🛵" if item['category'] == 'part_time' else "🎺" if item['category'] == 'club' else "🌟"
                     
                     c1.write(f"**{start}{end}**")
@@ -104,11 +124,12 @@ try:
                     if c3.button("削除", key=f"del_{item['id']}"):
                         cur.execute("DELETE FROM lifestyle_schedules WHERE id = %s", (item['id'],)); conn.commit(); st.rerun()
 
-    # --- タブ2/3: 提出物・試験（既存のロジック） ---
     with tab2:
+        st.subheader("📝 未完了の提出物")
         cur.execute("SELECT * FROM assignments WHERE is_completed = FALSE ORDER BY deadline ASC")
         for a in cur.fetchall():
-            st.checkbox(f"{a['deadline'].strftime('%m/%d')} : {a['subject_name']} - {a['content']}", key=f"assign_{a['id']}")
+            if st.checkbox(f"{a['deadline'].strftime('%m/%d')} : {a['subject_name']} - {a['content']}", key=f"assign_{a['id']}"):
+                cur.execute("UPDATE assignments SET is_completed = TRUE WHERE id = %s", (a['id'],)); conn.commit(); st.rerun()
 
     cur.close()
     conn.close()

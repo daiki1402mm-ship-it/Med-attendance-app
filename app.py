@@ -1,7 +1,7 @@
 import streamlit as st
 import psycopg2
 from psycopg2.extras import DictCursor
-from datetime import datetime, date, timedelta # 💡 date を追加しました
+from datetime import datetime, date, timedelta
 import pytz
 import pandas as pd
 import re
@@ -30,23 +30,54 @@ try:
         conn.commit()
         st.rerun()
 
-    # 出欠統計
+    # --- 出欠統計（修正版：実習・休講対応） ---
     st.sidebar.divider()
     st.sidebar.subheader("📊 出欠統計")
+    # SQLで「休講」「休み」を統計から除外して取得
     cur.execute("""
-        SELECT subject_name, COUNT(*) as total, 
+        SELECT subject_name, 
+               COUNT(*) as total, 
                COUNT(CASE WHEN status = '欠席' THEN 1 END) as absences 
-        FROM attendance WHERE status IN ('予定', '出席', '欠席')
+        FROM attendance 
+        WHERE status IN ('予定', '出席', '欠席') 
+          AND subject_name NOT LIKE '%休講%'
+          AND subject_name NOT LIKE '%休み%'
         GROUP BY subject_name
     """)
     stats = cur.fetchall()
-    for s in stats:
-        max_abs = s['total'] // 3
-        rem = max_abs - s['absences']
-        st.sidebar.write(f"**{s['subject_name']}**")
-        color = "red" if rem <= 1 else "green"
-        st.sidebar.markdown(f"欠席: {s['absences']} / 可: {max_abs} (残り: <span style='color:{color}; font-weight:bold;'>{rem}</span>)", unsafe_allow_html=True)
-        st.sidebar.progress(min(s['absences'] / max(max_abs, 1), 1.0))
+    
+    if stats:
+        for s in stats:
+            subject = s['subject_name']
+            
+            # 💡 「実習」が含まれる場合は欠席可能回数を0にする
+            if "実習" in subject:
+                max_abs = 0
+            else:
+                max_abs = s['total'] // 3
+            
+            remaining = max_abs - s['absences']
+            
+            # 色判定：実習で1回でも休む、または講義で残り1回以下なら赤
+            if "実習" in subject:
+                color = "red" if s['absences'] > 0 else "green"
+            else:
+                color = "red" if remaining <= 1 else "green"
+            
+            st.sidebar.write(f"**{subject}**")
+            st.sidebar.markdown(
+                f"欠席: {s['absences']} / 可: {max_abs} (残り: <span style='color:{color}; font-weight:bold;'>{remaining}</span>)", 
+                unsafe_allow_html=True
+            )
+            
+            # プログレスバー（分母0エラー回避）
+            if max_abs == 0:
+                progress_val = 1.0 if s['absences'] > 0 else 0.0
+            else:
+                progress_val = min(s['absences'] / max_abs, 1.0)
+            st.sidebar.progress(progress_val)
+    else:
+        st.sidebar.info("統計データがありません")
 
     # --- メイン画面 ---
     now = datetime.now(pytz.timezone('Asia/Tokyo'))
@@ -75,7 +106,7 @@ try:
         lectures = cur.fetchall()
         if not lectures: st.info("講義予定なし")
         else:
-            # 💡 空きコマ判定ロジックを強化（「休講」という科目名も空きとして扱う）
+            # 空きコマ判定（休講や休みを除外して判定）
             occ = {str(r['period']) for r in lectures if r['status'] not in ['休講', '欠席'] and not any(k in r['subject_name'] for k in ["休み", "休講", "祭"])}
             empty = [p for p in range(1, 7) if str(p) not in occ]
             if empty:
@@ -130,7 +161,6 @@ try:
                         match = re.search(r'(\d+)[/月](\d+)日?\s*(\d+)限?\s*(.+)', line)
                         if match:
                             m, d, p, s = match.groups()
-                            # 💡 date(2026, int(m), int(d)) が使えるようになりました
                             t_date = date(2026, int(m), int(d))
                             cur.execute(
                                 "INSERT INTO attendance (date, period, subject_name, status) VALUES (%s, %s, %s, '予定')",

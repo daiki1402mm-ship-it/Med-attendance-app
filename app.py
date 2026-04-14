@@ -44,7 +44,7 @@ try:
                 WHERE work_date >= %s AND work_date <= %s
             """, (last_month_start.isoformat(), last_month_end.isoformat()))
             last_month_row = cur.fetchone()
-            last_month_total = last_month_row['total'] if last_month_row['total'] else 0
+            last_month_total = last_month_row['total'] if last_month_row and last_month_row['total'] else 0
 
     # サイドバー表示
     total_earned = sum(row['total'] for row in this_month_data)
@@ -57,7 +57,7 @@ try:
     st.sidebar.caption(f"※{last_month_start.month}月実績の合計")
 
 except Exception as e:
-    st.sidebar.error(f"給与取得エラー: {e}")
+    st.sidebar.error(f"給料取得エラー: {e}")
 
 
 # --- 🗓 メイン画面：今日の予定表示 ---
@@ -67,12 +67,13 @@ st.subheader(f"📅 {today.strftime('%Y/%m/%d')} の予定")
 try:
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=DictCursor) as cur:
+            # 💡 修正箇所：today を .isoformat() にして渡す
             # 今日の講義予定
-            cur.execute("SELECT period, subject_name, status FROM attendance WHERE date = %s ORDER BY period ASC", (today,))
+            cur.execute("SELECT period, subject_name, status FROM attendance WHERE date = %s ORDER BY period ASC", (today.isoformat(),))
             lectures = cur.fetchall()
             
             # 今日の生活予定（部活・バイト）
-            cur.execute("SELECT detail, start_time, end_time FROM lifestyle_schedules WHERE event_date = %s ORDER BY start_time ASC", (today,))
+            cur.execute("SELECT detail, start_time, end_time FROM lifestyle_schedules WHERE event_date = %s ORDER BY start_time ASC", (today.isoformat(),))
             lifestyles = cur.fetchall()
 
     # 表示用カラム作成
@@ -83,7 +84,8 @@ try:
         if lectures:
             df_lec = pd.DataFrame(lectures)
             df_lec.columns = ['時限', '科目名', '状態']
-            st.table(df_lec)
+            # 表をスッキリ表示
+            st.dataframe(df_lec, use_container_width=True, hide_index=True)
         else:
             st.info("今日の講義予定はありません。")
 
@@ -91,7 +93,11 @@ try:
         st.markdown("#### 🏠 その他の予定")
         if lifestyles:
             for l in lifestyles:
-                time_range = f"{l['start_time'].strftime('%H:%M')}〜{l['end_time'].strftime('%H:%M')}" if l['start_time'] else "時間指定なし"
+                # 終了時間の有無で表示を切り替え
+                start_str = l['start_time'].strftime('%H:%M') if l['start_time'] else ""
+                end_str = f"〜{l['end_time'].strftime('%H:%M')}" if l['end_time'] else ""
+                time_range = f"{start_str}{end_str}" if start_str else "時間指定なし"
+                
                 st.warning(f"**{time_range}**\n\n{l['detail']}")
         else:
             st.info("部活やバイトの予定はありません。")
@@ -101,4 +107,4 @@ except Exception as e:
 
 # --- 🧪 デバッグ用データ（必要に応じて） ---
 with st.expander("生データを確認"):
-    st.write("今日のタイムスタンプ:", today)
+    st.write("今日のタイムスタンプ (ISO):", today.isoformat())

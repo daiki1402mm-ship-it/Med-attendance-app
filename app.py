@@ -33,7 +33,7 @@ try:
         cur.execute("INSERT INTO settings (key, value) VALUES ('cbt_date', %s) ON CONFLICT (key) DO UPDATE SET value = %s", (new_cbt.isoformat(), new_cbt.isoformat()))
         conn.commit(); st.rerun()
 
-    # 📊 出欠統計（厳格な医学生ルール ＋ 出席数合計の表示を追加）
+    # 📊 出欠統計（厳格な医学生ルール ＋ 出席数合計）
     st.sidebar.divider()
     st.sidebar.subheader("📊 科目別・欠席許容状況")
     cur.execute("""
@@ -51,19 +51,15 @@ try:
     
     for s in stats:
         name = s['subject_name']
-        # 実習・臨床系は欠席可能数 0
         if any(k in name for k in ["実習", "臨床"]):
             max_abs = 0
         else:
-            max_abs = s['total'] // 3  # 通常講義は 1/3 まで
+            max_abs = s['total'] // 3
             
         rem = max_abs - s['absences']
         st.sidebar.write(f"**{name}**")
         color = "red" if rem <= 0 else "orange" if rem == 1 else "green"
-        
-        # 💡 出席数合計（s['attended']）を項目に追加
         st.sidebar.markdown(f"出席: {s['attended']} / 欠席: {s['absences']} / 可: {max_abs} (残り: <span style='color:{color}; font-weight:bold;'>{rem}</span>)", unsafe_allow_html=True)
-        
         progress = min(s['absences'] / max(max_abs, 1), 1.0) if max_abs > 0 else (1.0 if s['absences'] > 0 else 0.0)
         st.sidebar.progress(progress)
 
@@ -81,32 +77,55 @@ try:
     st.divider()
 
     # タブ表示
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🗓 本日の講義", "📝 提出物", "⚖️ 試験日程", "💰 給与実績", "🚀 一括登録"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🗓 本日の予定", "📝 提出物", "⚖️ 試験日程", "💰 給与実績", "🚀 一括登録"])
 
-    # --- タブ1: 本日の講義 ---
+    # --- タブ1: 本日の予定（講義 ＋ プライベート） ---
     with tab1:
-        selected_date = st.date_input("表示日を選択", value=today)
+        selected_date = st.date_input("表示日を選択", value=today, key="view_date")
+        
+        # データの取得
         cur.execute("SELECT * FROM attendance WHERE date = %s ORDER BY period ASC", (selected_date.isoformat(),))
         lectures = cur.fetchall()
-        if not lectures: st.info("講義予定なし")
-        else:
-            occ = {str(r['period']) for r in lectures if r['status'] not in ['休講', '欠席'] and not any(k in r['subject_name'] for k in ["休み", "休講", "祭"])}
-            empty = [p for p in range(1, 7) if str(p) not in occ]
-            if empty: st.write(f"💡 空きコマ: {', '.join(map(str, empty))}限")
+        cur.execute("SELECT * FROM lifestyle_schedules WHERE event_date = %s ORDER BY start_time ASC", (selected_date.isoformat(),))
+        lifestyles = cur.fetchall()
 
-            for l in lectures:
-                c1, c2, c3 = st.columns([1, 2, 4])
-                c1.write(f"**{l['period']}限**")
-                c2.write(f"**{l['subject_name']}** ({l['status']})")
-                b = c3.columns(4)
-                if b[0].button("出席", key=f"at_{l['id']}"):
-                    cur.execute("UPDATE attendance SET status = '出席' WHERE id = %s", (l['id'],)); conn.commit(); st.rerun()
-                if b[1].button("欠席", key=f"ab_{l['id']}"):
-                    cur.execute("UPDATE attendance SET status = '欠席' WHERE id = %s", (l['id'],)); conn.commit(); st.rerun()
-                if b[2].button("休講", key=f"ca_{l['id']}"):
-                    cur.execute("UPDATE attendance SET status = '休講' WHERE id = %s", (l['id'],)); conn.commit(); st.rerun()
-                if b[3].button("予定", key=f"re_{l['id']}"):
-                    cur.execute("UPDATE attendance SET status = '予定' WHERE id = %s", (l['id'],)); conn.commit(); st.rerun()
+        # 左右分割レイアウト
+        col_lec, col_life = st.columns([3, 2])
+
+        with col_lec:
+            st.subheader("📚 大学の講義")
+            if not lectures: st.info("講義予定なし")
+            else:
+                occ = {str(r['period']) for r in lectures if r['status'] not in ['休講', '欠席'] and not any(k in r['subject_name'] for k in ["休み", "休講", "祭"])}
+                empty = [p for p in range(1, 7) if str(p) not in occ]
+                if empty: st.write(f"💡 空きコマ: {', '.join(map(str, empty))}限")
+
+                for l in lectures:
+                    with st.container():
+                        c1, c2, c3 = st.columns([1, 2, 4])
+                        c1.write(f"**{l['period']}限**")
+                        c2.write(f"**{l['subject_name']}**\n({l['status']})")
+                        b = c3.columns(4)
+                        if b[0].button("出席", key=f"at_{l['id']}"):
+                            cur.execute("UPDATE attendance SET status = '出席' WHERE id = %s", (l['id'],)); conn.commit(); st.rerun()
+                        if b[1].button("欠席", key=f"ab_{l['id']}"):
+                            cur.execute("UPDATE attendance SET status = '欠席' WHERE id = %s", (l['id'],)); conn.commit(); st.rerun()
+                        if b[2].button("休講", key=f"ca_{l['id']}"):
+                            cur.execute("UPDATE attendance SET status = '休講' WHERE id = %s", (l['id'],)); conn.commit(); st.rerun()
+                        if b[3].button("予定", key=f"re_{l['id']}"):
+                            cur.execute("UPDATE attendance SET status = '予定' WHERE id = %s", (l['id'],)); conn.commit(); st.rerun()
+                        st.divider()
+
+        with col_life:
+            st.subheader("🏠 プライベート予定")
+            if not lifestyles: st.info("予定なし")
+            else:
+                for life in lifestyles:
+                    start = life['start_time'].strftime('%H:%M') if life['start_time'] else ""
+                    end = f"〜{life['end_time'].strftime('%H:%M')}" if life['end_time'] else ""
+                    time_str = f"⏰ {start}{end}" if start else "⏰ 時間指定なし"
+                    
+                    st.warning(f"**{time_str}**\n\n{life['detail']}")
 
     # --- タブ2: 提出物 ---
     with tab2:
@@ -151,7 +170,7 @@ try:
         work_data = cur.fetchall()
         if work_data:
             st.table(pd.DataFrame([dict(r) for r in work_data])[['work_date', 'job_name', 'actual_start', 'actual_end', 'pay_amount']])
-        else: st.info("今月の登録データはありません。")
+        else: st.info("今月の実績データはありません。")
 
     # --- タブ5: 🚀 一括登録 ---
     with tab5:

@@ -1,3 +1,4 @@
+
 import streamlit as st
 import psycopg2
 from psycopg2.extras import DictCursor
@@ -6,7 +7,7 @@ import pytz
 import pandas as pd
 import re
 
-# 1. データベース接続設定 (Supabase Secrets)
+# 1. データベース接続設定
 def get_connection():
     return psycopg2.connect(st.secrets["SUPABASE_URI"])
 
@@ -20,21 +21,10 @@ try:
     conn = get_connection()
     cur = conn.cursor(cursor_factory=DictCursor)
 
-    # --- サイドバー：設定・統計・給与 ---
-    st.sidebar.title("⚙️ 設定・統計")
+    # --- サイドバー：設定・進級統計 ---
+    st.sidebar.title("⚙️ 設定・進級管理")
     
-    # 💰 【追加】給与サマリー（サイドバー最上部）
-    st.sidebar.subheader("💸 今月の給与")
-    first_day_this_month = today.replace(day=1)
-    cur.execute("""
-        SELECT SUM(pay_amount) as total FROM work_results 
-        WHERE work_date >= %s
-    """, (first_day_this_month.isoformat(),))
-    this_month_earn = cur.fetchone()['total'] or 0
-    st.sidebar.metric(f"{today.month}月の稼ぎ（目安）", f"¥{this_month_earn:,}")
-
     # CBT日程の設定
-    st.sidebar.divider()
     cur.execute("SELECT value FROM settings WHERE key = 'cbt_date'")
     cbt_res = cur.fetchone()
     current_cbt = datetime.strptime(cbt_res['value'], '%Y-%m-%d').date() if cbt_res else today
@@ -42,13 +32,11 @@ try:
     new_cbt = st.sidebar.date_input("CBT試験日を設定", value=current_cbt)
     if new_cbt != current_cbt:
         cur.execute("INSERT INTO settings (key, value) VALUES ('cbt_date', %s) ON CONFLICT (key) DO UPDATE SET value = %s", (new_cbt.isoformat(), new_cbt.isoformat()))
-        conn.commit()
-        st.rerun()
+        conn.commit(); st.rerun()
 
-    # 📊 出欠統計（医学生ルール適用版）
+    # 📊 出欠統計（厳格な医学生ルール：実習は $\frac{1}{3}$ ルール適用外）
     st.sidebar.divider()
-    st.sidebar.subheader("📊 科目別・欠席許容数")
-    # 💡 ルール：医学祭や休みは除外、実習は欠席可能数0
+    st.sidebar.subheader("📊 科目別・欠席許容状況")
     cur.execute("""
         SELECT subject_name, COUNT(*) as total, 
                COUNT(CASE WHEN status = '欠席' THEN 1 END) as absences 
@@ -63,17 +51,16 @@ try:
     
     for s in stats:
         name = s['subject_name']
-        # 💡 実習系は強制的に許容数を0にする
-        if "実習" in name or "臨床" in name:
+        # 実習・臨床系は欠席可能数 0
+        if any(k in name for k in ["実習", "臨床"]):
             max_abs = 0
         else:
-            max_abs = s['total'] // 3  # 通常は1/3まで
+            max_abs = s['total'] // 3  # 通常講義は $\frac{1}{3}$ まで
             
         rem = max_abs - s['absences']
         st.sidebar.write(f"**{name}**")
         color = "red" if rem <= 0 else "orange" if rem == 1 else "green"
         st.sidebar.markdown(f"欠席: {s['absences']} / 可: {max_abs} (残り: <span style='color:{color}; font-weight:bold;'>{rem}</span>)", unsafe_allow_html=True)
-        # 進捗バー（欠席が増えるほど満たされる）
         progress = min(s['absences'] / max(max_abs, 1), 1.0) if max_abs > 0 else (1.0 if s['absences'] > 0 else 0.0)
         st.sidebar.progress(progress)
 
@@ -91,12 +78,12 @@ try:
 
     st.divider()
 
-    # タブ表示（給与実績タブを追加）
+    # タブ表示（給与実績と一括登録を完全に分離）
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["🗓 本日の講義", "📝 提出物", "⚖️ 試験日程", "💰 給与実績", "🚀 一括登録"])
 
     # --- タブ1: 本日の講義 ---
     with tab1:
-        selected_date = st.date_input("表示日を選択", value=today, key="view_date")
+        selected_date = st.date_input("表示日を選択", value=today)
         cur.execute("SELECT * FROM attendance WHERE date = %s ORDER BY period ASC", (selected_date.isoformat(),))
         lectures = cur.fetchall()
         if not lectures: st.info("講義予定なし")
@@ -141,20 +128,37 @@ try:
         if exams: st.table(pd.DataFrame([dict(e) for e in exams])[['exam_date', 'subject_name', 'location']])
         else: st.info("試験予定なし")
 
-    # --- タブ4: 【追加】給与実績 ---
+    # --- タブ4: 💰 給与実績（詳細 & 累計統計） ---
     with tab4:
-        st.subheader("💰 アルバイト給与詳細")
-        cur.execute("SELECT * FROM work_results WHERE work_date >= %s ORDER BY work_date DESC", (first_day_this_month.isoformat(),))
-        results = cur.fetchall()
-        if results:
-            df_work = pd.DataFrame([dict(r) for r in results])
-            st.table(df_work[['work_date', 'job_name', 'actual_start', 'actual_end', 'pay_amount']])
-        else: st.info("今月の実績はまだありません。")
+        st.subheader("💰 アルバイト給与サマリー")
+        
+        # 累計計算
+        first_day_month = today.replace(day=1)
+        first_day_year = today.replace(month=1, day=1)
+        
+        cur.execute("SELECT SUM(pay_amount) as m_total FROM work_results WHERE work_date >= %s", (first_day_month.isoformat(),))
+        m_total = cur.fetchone()['m_total'] or 0
+        
+        cur.execute("SELECT SUM(pay_amount) as y_total FROM work_results WHERE work_date >= %s", (first_day_year.isoformat(),))
+        y_total = cur.fetchone()['y_total'] or 0
+        
+        met1, met2 = st.columns(2)
+        met1.metric(f"{today.month}月の稼ぎ", f"¥{m_total:,}")
+        met2.metric(f"{today.year}年の総稼ぎ", f"¥{y_total:,}")
+        
+        st.divider()
+        st.subheader("🗓 日別実績詳細")
+        cur.execute("SELECT * FROM work_results WHERE work_date >= %s ORDER BY work_date DESC", (first_day_month.isoformat(),))
+        work_data = cur.fetchall()
+        if work_data:
+            st.table(pd.DataFrame([dict(r) for r in work_data])[['work_date', 'job_name', 'actual_start', 'actual_end', 'pay_amount']])
+        else: st.info("今月の登録データはありません。")
 
-    # --- タブ5: 予定を一括登録 ---
-    with tab4:
-        st.subheader("🚀 予定を一括流し込み")
-        bulk_text = st.text_area("予定リストをペースト (例: 4/15 1 消化器内科)", height=200)
+    # --- タブ5: 🚀 予定を一括登録 ---
+    with tab5:
+        st.subheader("🚀 予定リストを一括流し込み")
+        st.caption("形式例: 4/15 1 消化器内科")
+        bulk_text = st.text_area("ここにリストをペースト", height=300)
         if st.button("一括登録を実行", type="primary"):
             if bulk_text:
                 lines = bulk_text.strip().split('\n')
@@ -166,10 +170,9 @@ try:
                         t_date = date(2026, int(m), int(d))
                         cur.execute("INSERT INTO attendance (date, period, subject_name, status) VALUES (%s, %s, %s, '予定')", (t_date.isoformat(), int(p), s.strip()))
                         success_count += 1
-                conn.commit(); st.success(f"✅ {success_count}件 登録完了！"); st.rerun()
+                conn.commit(); st.success(f"✅ {success_count}件の登録に成功しました！"); st.rerun()
 
-    cur.close()
-    conn.close()
+    cur.close(); conn.close()
 
 except Exception as e:
     st.error(f"エラーが発生しました: {e}")

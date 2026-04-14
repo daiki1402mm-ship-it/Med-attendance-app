@@ -17,6 +17,55 @@ try:
 
     # --- サイドバー：管理パネル ---
     st.sidebar.title("⚙️ 管理パネル")
+
+    import pandas as pd
+from datetime import datetime, timedelta
+
+# --- 💰 給与計算ロジック (サイドバー) ---
+st.sidebar.divider()
+st.sidebar.subheader("💸 給与・報酬状況")
+
+try:
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=DictCursor) as cur:
+            # 1. 今月の稼ぎ（来月支給される予定の額）
+            first_day_this_month = today.replace(day=1)
+            cur.execute("""
+                SELECT job_name, SUM(pay_amount) as total 
+                FROM work_results 
+                WHERE work_date >= %s AND work_date <= %s 
+                GROUP BY job_name
+            """, (first_day_this_month, today))
+            this_month_data = cur.fetchall()
+
+            # 2. 先月の稼ぎ（今月の10日や25日に入る額）
+            last_month_end = first_day_this_month - timedelta(days=1)
+            last_month_start = last_month_end.replace(day=1)
+            cur.execute("""
+                SELECT SUM(pay_amount) as total 
+                FROM work_results 
+                WHERE work_date >= %s AND work_date <= %s
+            """, (last_month_start, last_month_end))
+            last_month_total = cur.fetchone()['total'] or 0
+
+    # --- 表示部分 ---
+    # 今月の総稼ぎ
+    total_earned_this_month = sum(row['total'] for row in this_month_data)
+    st.sidebar.metric("今月の稼ぎ合計 (来月払)", f"¥{total_earned_this_month:,}")
+    
+    # 内訳を小さく表示
+    for row in this_month_data:
+        st.sidebar.caption(f"・{row['job_name']}: ¥{row['total']:,}")
+
+    st.sidebar.write("") # スペース空け
+
+    # 今月入ってくる予定の額
+    st.sidebar.success(f"📅 今月の支給予定: ¥{last_month_total:,}")
+    st.sidebar.caption("※先月分の合計（10日/25日払）")
+
+except Exception as e:
+    st.sidebar.error(f"給与データ取得エラー: {e}")
+
     
     # CBT設定
     cur.execute("SELECT value FROM settings WHERE key = 'cbt_date'")

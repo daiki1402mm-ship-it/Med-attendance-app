@@ -117,7 +117,7 @@ try:
                         st.divider()
 
         with col_life:
-            st.subheader("🏠 プライベート予定")
+            st.subheader("🏠 本日のプライベート予定")
             if not lifestyles: st.info("予定なし")
             else:
                 for life in lifestyles:
@@ -126,6 +126,25 @@ try:
                     time_str = f"⏰ {start}{end}" if start else "⏰ 時間指定なし"
                     
                     st.warning(f"**{time_str}**\n\n{life['detail']}")
+            
+            # 💡【新規追加】明日以降の直近の予定を表示するセクション
+            st.divider()
+            st.subheader("🔜 今後のお楽しみ・予定")
+            cur.execute("""
+                SELECT * FROM lifestyle_schedules 
+                WHERE event_date > %s 
+                ORDER BY event_date ASC, start_time ASC 
+                LIMIT 7
+            """, (selected_date.isoformat(),))
+            upcoming = cur.fetchall()
+            
+            if upcoming:
+                for u in upcoming:
+                    u_start = u['start_time'].strftime('%H:%M') if u['start_time'] else ""
+                    u_time_str = f" {u_start}〜" if u_start else ""
+                    st.write(f"・**{u['event_date'].strftime('%m/%d')}**: {u['detail']}{u_time_str}")
+            else:
+                st.caption("直近の予定はまだありません。")
 
     # --- タブ2: 提出物 ---
     with tab2:

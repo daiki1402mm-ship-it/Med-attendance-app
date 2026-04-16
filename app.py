@@ -157,7 +157,11 @@ try:
                 dl_days = (a['deadline'] - today).days
                 if dl_days <= 3: c1.error(f"あと {dl_days} 日")
                 else: c1.warning(f"あと {dl_days} 日")
-                c2.write(f"**{a['subject_name']}** : {a['content']}")
+                
+                # 💡修正箇所：リマインド日が設定されていれば、その日付も表示する
+                remind_text = f" (🔔 リマインド: {a['remind_date'].strftime('%m/%d')})" if a['remind_date'] else ""
+                c2.write(f"**{a['subject_name']}** : {a['content']}{remind_text}")
+                
                 if c3.button("完了", key=f"cp_{a['id']}"):
                     cur.execute("UPDATE assignments SET is_completed = TRUE WHERE id = %s", (a['id'],)); conn.commit(); st.rerun()
 

@@ -158,7 +158,7 @@ try:
                 if dl_days <= 3: c1.error(f"あと {dl_days} 日")
                 else: c1.warning(f"あと {dl_days} 日")
                 
-                # 💡修正箇所：リマインド日が設定されていれば、その日付も表示する
+                # 💡リマインド日が設定されていれば、その日付も表示
                 remind_text = f" (🔔 リマインド: {a['remind_date'].strftime('%m/%d')})" if a['remind_date'] else ""
                 c2.write(f"**{a['subject_name']}** : {a['content']}{remind_text}")
                 
@@ -178,22 +178,67 @@ try:
         first_day_month = today.replace(day=1)
         first_day_year = today.replace(month=1, day=1)
         
-        cur.execute("SELECT SUM(pay_amount) as m_total FROM work_results WHERE work_date >= %s", (first_day_month.isoformat(),))
-        m_total = cur.fetchone()['m_total'] or 0
-        cur.execute("SELECT SUM(pay_amount) as y_total FROM work_results WHERE work_date >= %s", (first_day_year.isoformat(),))
-        y_total = cur.fetchone()['y_total'] or 0
+        # 1. 月間・年間の仕事別合計を取得
+        cur.execute("""
+            SELECT job_name, SUM(pay_amount) as total 
+            FROM work_results 
+            WHERE work_date >= %s 
+            GROUP BY job_name
+        """, (first_day_month.isoformat(),))
+        month_stats = {row['job_name']: row['total'] for row in cur.fetchall()}
+
+        cur.execute("""
+            SELECT job_name, SUM(pay_amount) as total 
+            FROM work_results 
+            WHERE work_date >= %s 
+            GROUP BY job_name
+        """, (first_day_year.isoformat(),))
+        year_stats = {row['job_name']: row['total'] for row in cur.fetchall()}
+
+        # 2. 全体メトリクス（最上部）
+        m_total_all = sum(month_stats.values())
+        y_total_all = sum(year_stats.values())
         
         met1, met2 = st.columns(2)
-        met1.metric(f"{today.month}月の稼ぎ", f"¥{m_total:,}")
-        met2.metric(f"{today.year}年の総稼ぎ", f"¥{y_total:,}")
+        met1.metric(f"{today.month}月の総稼ぎ", f"¥{m_total_all:,}")
+        met2.metric(f"{today.year}年の総稼ぎ", f"¥{y_total_all:,}")
         
         st.divider()
-        st.subheader("🗓 日別実績詳細")
+
+        # 3. アルバイト別集計表（ここが今回のメイン）
+        st.subheader("📊 バイト別・集計比較")
+        
+        # データベースにある全仕事名をユニークに取得
+        all_jobs = sorted(list(set(list(month_stats.keys()) + list(year_stats.keys()))))
+        
+        if not all_jobs:
+            st.info("集計データがまだありません。")
+        else:
+            summary_data = []
+            for job in all_jobs:
+                m_val = month_stats.get(job, 0)
+                y_val = year_stats.get(job, 0)
+                summary_data.append({
+                    "アルバイト名": job,
+                    f"{today.month}月の稼ぎ": f"¥{m_val:,}",
+                    f"{today.year}年の合計": f"¥{y_val:,}"
+                })
+            
+            # DataFrameに変換して表示
+            df_summary = pd.DataFrame(summary_data)
+            st.table(df_summary)
+
+        st.divider()
+
+        # 4. 日別実績詳細
+        st.subheader("🗓 今月の日別実績詳細")
         cur.execute("SELECT * FROM work_results WHERE work_date >= %s ORDER BY work_date DESC", (first_day_month.isoformat(),))
         work_data = cur.fetchall()
         if work_data:
-            st.table(pd.DataFrame([dict(r) for r in work_data])[['work_date', 'job_name', 'actual_start', 'actual_end', 'pay_amount']])
-        else: st.info("今月の実績データはありません。")
+            df_detail = pd.DataFrame([dict(r) for r in work_data])
+            st.table(df_detail[['work_date', 'job_name', 'actual_start', 'actual_end', 'pay_amount']])
+        else:
+            st.info("今月の日別データはありません。")
 
     # --- タブ5: 🚀 一括登録 ---
     with tab5:

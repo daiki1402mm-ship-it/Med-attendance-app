@@ -169,7 +169,6 @@ try:
             pivot_table['年間合計'] = pivot_table.sum(axis=1)
             pivot_table.loc['月間合計(全体)'] = pivot_table.sum()
             
-            # 💡 修正箇所: applymap を map に変更 (Pandasのバージョン互換性対応)
             formatted_table = pivot_table.map(lambda x: f"¥{x:,}")
             st.table(formatted_table)
 
@@ -193,6 +192,39 @@ try:
         this_month_detail = cur.fetchall()
         if this_month_detail:
             st.table(pd.DataFrame([dict(r) for r in this_month_detail]))
+
+        # 💡ここから新規追加：過去・その他給与の手入力フォーム
+        st.divider()
+        st.subheader("✍️ 過去・その他給与の手入力")
+        st.caption("💡 ヒント：3月分など「月ごとの給与」を入力する場合は、その月の末日（3/31など）を選択してください。週ごとなら週末を選ぶと集計がきれいにまとまります。")
+        
+        with st.form("manual_salary_form"):
+            col_d, col_j, col_a = st.columns([1, 1, 1])
+            with col_d:
+                manual_date = st.date_input("日付を選択", value=today)
+            with col_j:
+                job_sel = st.selectbox("バイト名", ["東進", "Welocalize", "ファミマ", "トライ(講師)", "トライ(事務)", "単発", "その他(直接入力)"])
+            with col_a:
+                manual_amount = st.number_input("金額 (円)", min_value=0, step=1000)
+                
+            manual_job_custom = st.text_input("※「その他」を選んだ場合のみ、ここにバイト名を入力", "")
+            
+            submit_manual = st.form_submit_button("給与実績を登録")
+            
+            if submit_manual:
+                final_job_name = manual_job_custom if job_sel == "その他(直接入力)" else job_sel
+                if final_job_name.strip() == "":
+                    st.error("バイト名を入力してください。")
+                elif manual_amount <= 0:
+                    st.error("0円以上の金額を入力してください。")
+                else:
+                    cur.execute(
+                        "INSERT INTO work_results (job_name, work_date, pay_amount) VALUES (%s, %s, %s)",
+                        (final_job_name.strip(), manual_date.isoformat(), manual_amount)
+                    )
+                    conn.commit()
+                    st.success(f"✅ {manual_date.strftime('%m/%d')}の「{final_job_name}」に ¥{manual_amount:,} を登録しました！")
+                    st.rerun()
 
     # --- タブ5: 🚀 一括登録 ---
     with tab5:

@@ -180,20 +180,37 @@ try:
             c_met1.metric(f"{today.month}月の総収入", f"¥{int(m_total):,}")
             c_met2.metric(f"{today.year}年の総計", f"¥{int(y_total):,}")
 
+        # 💡ここから変更：月を選択して稼働実績を確認できるセクション
         st.divider()
-        st.subheader("🗓 今月の詳細実績")
+        st.subheader("🗓 月別・稼働実績の確認")
+        st.caption("確認したい年月を選択してください。その月に働いた日と時間が一覧表示されます。")
+        
+        col_y, col_m = st.columns([1, 1])
+        with col_y:
+            view_year = st.selectbox("年を選択", [today.year, today.year - 1], index=0)
+        with col_m:
+            view_month = st.selectbox("月を選択", list(range(1, 13)), index=today.month - 1)
+            
+        view_start = date(view_year, view_month, 1)
+        if view_month == 12:
+            view_end = date(view_year + 1, 1, 1)
+        else:
+            view_end = date(view_year, view_month + 1, 1)
+
         cur.execute("""
             SELECT work_date, job_name, actual_start, actual_end, pay_amount 
             FROM work_results 
-            WHERE work_date >= %s 
+            WHERE work_date >= %s AND work_date < %s
             ORDER BY work_date DESC
-        """, (today.replace(day=1).isoformat(),))
+        """, (view_start.isoformat(), view_end.isoformat()))
             
-        this_month_detail = cur.fetchall()
-        if this_month_detail:
-            st.table(pd.DataFrame([dict(r) for r in this_month_detail]))
+        month_detail = cur.fetchall()
+        if month_detail:
+            st.table(pd.DataFrame([dict(r) for r in month_detail]))
+        else:
+            st.info(f"{view_year}年{view_month}月の稼働実績はありません。")
 
-        # 💡ここから新規追加：過去・その他給与の手入力フォーム
+        # 過去・その他給与の手入力フォーム
         st.divider()
         st.subheader("✍️ 過去・その他給与の手入力")
         st.caption("💡 ヒント：3月分など「月ごとの給与」を入力する場合は、その月の末日（3/31など）を選択してください。週ごとなら週末を選ぶと集計がきれいにまとまります。")

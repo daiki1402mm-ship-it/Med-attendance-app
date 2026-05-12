@@ -33,7 +33,7 @@ try:
         cur.execute("INSERT INTO settings (key, value) VALUES ('cbt_date', %s) ON CONFLICT (key) DO UPDATE SET value = %s", (new_cbt.isoformat(), new_cbt.isoformat()))
         conn.commit(); st.rerun()
 
-    # 📊 出欠統計
+    # 📊 出欠統計（厳格な医学生ルール ＋ 出席数合計）
     st.sidebar.divider()
     st.sidebar.subheader("📊 科目別・欠席許容状況")
     cur.execute("""
@@ -79,7 +79,7 @@ try:
     # タブ表示
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["🗓 本日の予定", "📝 提出物", "⚖️ 試験日程", "💰 給与実績", "🚀 一括登録"])
 
-    # --- タブ1: 本日の予定 ---
+    # --- タブ1: 本日の予定（講義 ＋ プライベート） ---
     with tab1:
         selected_date = st.date_input("表示日を選択", value=today, key="view_date")
         cur.execute("SELECT * FROM attendance WHERE date = %s ORDER BY period ASC", (selected_date.isoformat(),))
@@ -143,7 +143,6 @@ try:
         st.subheader("💰 バイト別・月別給与サマリー")
         first_day_year = today.replace(month=1, day=1)
         
-        # 1. 今年の全実績データを取得
         cur.execute("""
             SELECT job_name, pay_amount, work_date 
             FROM work_results 
@@ -154,12 +153,10 @@ try:
         if not all_work:
             st.info("今年の実績データはまだありません。")
         else:
-            # Pandasでマトリックス表を作成
             df_all = pd.DataFrame([dict(r) for r in all_work])
             df_all['月'] = pd.to_datetime(df_all['work_date']).dt.month
             
-            # 月別・バイト別のピボットテーブル作成
-            # インデックス: バイト名, カラム: 月, 値: 給料合計
+            # ピボットテーブル作成
             pivot_table = df_all.pivot_table(
                 index='job_name', 
                 columns='月', 
@@ -168,20 +165,14 @@ try:
                 fill_value=0
             )
 
-            # カラム名を「1月」「2月」形式に
             pivot_table.columns = [f"{c}月" for c in pivot_table.columns]
-            
-            # 💡 右端に「年間合計」を追加
             pivot_table['年間合計'] = pivot_table.sum(axis=1)
-            
-            # 💡 下端に「月間合計」を追加
             pivot_table.loc['月間合計(全体)'] = pivot_table.sum()
             
-            # 金額表示を見やすく整形
-            formatted_table = pivot_table.applymap(lambda x: f"¥{x:,}")
+            # 💡 修正箇所: applymap を map に変更 (Pandasのバージョン互換性対応)
+            formatted_table = pivot_table.map(lambda x: f"¥{x:,}")
             st.table(formatted_table)
 
-            # 今月の合計と今年の総計をメトリクスで表示
             this_month_col = f"{today.month}月"
             m_total = pivot_table[this_month_col].loc['月間合計(全体)'] if this_month_col in pivot_table.columns else 0
             y_total = pivot_table['年間合計'].loc['月間合計(全体)']
@@ -198,6 +189,7 @@ try:
             WHERE work_date >= %s 
             ORDER BY work_date DESC
         """, (today.replace(day=1).isoformat(),))
+            
         this_month_detail = cur.fetchall()
         if this_month_detail:
             st.table(pd.DataFrame([dict(r) for r in this_month_detail]))

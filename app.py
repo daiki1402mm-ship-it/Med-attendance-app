@@ -20,7 +20,7 @@ try:
     conn = get_connection()
     cur = conn.cursor(cursor_factory=DictCursor)
 
-    # --- サイドバー：設定・進級統計 ---
+    # --- サイドバー：設定・進級管理 ---
     st.sidebar.title("⚙️ 設定・進級管理")
     
     # CBT日程の設定
@@ -33,7 +33,7 @@ try:
         cur.execute("INSERT INTO settings (key, value) VALUES ('cbt_date', %s) ON CONFLICT (key) DO UPDATE SET value = %s", (new_cbt.isoformat(), new_cbt.isoformat()))
         conn.commit(); st.rerun()
 
-    # 📊 出欠統計（厳格な医学生ルール ＋ 出席数合計）
+    # 📊 出欠統計
     st.sidebar.divider()
     st.sidebar.subheader("📊 科目別・欠席許容状況")
     cur.execute("""
@@ -79,19 +79,15 @@ try:
     # タブ表示
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["🗓 本日の予定", "📝 提出物", "⚖️ 試験日程", "💰 給与実績", "🚀 一括登録"])
 
-    # --- タブ1: 本日の予定（講義 ＋ プライベート） ---
+    # --- タブ1: 本日の予定 ---
     with tab1:
         selected_date = st.date_input("表示日を選択", value=today, key="view_date")
-        
-        # データの取得
         cur.execute("SELECT * FROM attendance WHERE date = %s ORDER BY period ASC", (selected_date.isoformat(),))
         lectures = cur.fetchall()
         cur.execute("SELECT * FROM lifestyle_schedules WHERE event_date = %s ORDER BY start_time ASC", (selected_date.isoformat(),))
         lifestyles = cur.fetchall()
 
-        # 左右分割レイアウト
         col_lec, col_life = st.columns([3, 2])
-
         with col_lec:
             st.subheader("📚 大学の講義")
             if not lectures: st.info("講義予定なし")
@@ -99,52 +95,25 @@ try:
                 occ = {str(r['period']) for r in lectures if r['status'] not in ['休講', '欠席'] and not any(k in r['subject_name'] for k in ["休み", "休講", "祭"])}
                 empty = [p for p in range(1, 7) if str(p) not in occ]
                 if empty: st.write(f"💡 空きコマ: {', '.join(map(str, empty))}限")
-
                 for l in lectures:
                     with st.container():
                         c1, c2, c3 = st.columns([1, 2, 4])
                         c1.write(f"**{l['period']}限**")
                         c2.write(f"**{l['subject_name']}**\n({l['status']})")
                         b = c3.columns(4)
-                        if b[0].button("出席", key=f"at_{l['id']}"):
-                            cur.execute("UPDATE attendance SET status = '出席' WHERE id = %s", (l['id'],)); conn.commit(); st.rerun()
-                        if b[1].button("欠席", key=f"ab_{l['id']}"):
-                            cur.execute("UPDATE attendance SET status = '欠席' WHERE id = %s", (l['id'],)); conn.commit(); st.rerun()
-                        if b[2].button("休講", key=f"ca_{l['id']}"):
-                            cur.execute("UPDATE attendance SET status = '休講' WHERE id = %s", (l['id'],)); conn.commit(); st.rerun()
-                        if b[3].button("予定", key=f"re_{l['id']}"):
-                            cur.execute("UPDATE attendance SET status = '予定' WHERE id = %s", (l['id'],)); conn.commit(); st.rerun()
+                        for idx, btn_label in enumerate(["出席", "欠席", "休講", "予定"]):
+                            if b[idx].button(btn_label, key=f"btn_{btn_label}_{l['id']}"):
+                                cur.execute("UPDATE attendance SET status = %s WHERE id = %s", (btn_label, l['id'])); conn.commit(); st.rerun()
                         st.divider()
 
         with col_life:
-            st.subheader("🏠 本日のプライベート予定")
+            st.subheader("🏠 本日の予定")
             if not lifestyles: st.info("予定なし")
             else:
                 for life in lifestyles:
                     start = life['start_time'].strftime('%H:%M') if life['start_time'] else ""
                     end = f"〜{life['end_time'].strftime('%H:%M')}" if life['end_time'] else ""
-                    time_str = f"⏰ {start}{end}" if start else "⏰ 時間指定なし"
-                    
-                    st.warning(f"**{time_str}**\n\n{life['detail']}")
-            
-            # 💡明日以降の直近の予定を表示するセクション
-            st.divider()
-            st.subheader("🔜 今後のお楽しみ・予定")
-            cur.execute("""
-                SELECT * FROM lifestyle_schedules 
-                WHERE event_date > %s 
-                ORDER BY event_date ASC, start_time ASC 
-                LIMIT 7
-            """, (selected_date.isoformat(),))
-            upcoming = cur.fetchall()
-            
-            if upcoming:
-                for u in upcoming:
-                    u_start = u['start_time'].strftime('%H:%M') if u['start_time'] else ""
-                    u_time_str = f" {u_start}〜" if u_start else ""
-                    st.write(f"・**{u['event_date'].strftime('%m/%d')}**: {u['detail']}{u_time_str}")
-            else:
-                st.caption("直近の予定はまだありません。")
+                    st.warning(f"⏰ {start}{end}\n\n{life['detail']}")
 
     # --- タブ2: 提出物 ---
     with tab2:
@@ -157,11 +126,8 @@ try:
                 dl_days = (a['deadline'] - today).days
                 if dl_days <= 3: c1.error(f"あと {dl_days} 日")
                 else: c1.warning(f"あと {dl_days} 日")
-                
-                # 💡リマインド日が設定されていれば、その日付も表示
                 remind_text = f" (🔔 リマインド: {a['remind_date'].strftime('%m/%d')})" if a['remind_date'] else ""
                 c2.write(f"**{a['subject_name']}** : {a['content']}{remind_text}")
-                
                 if c3.button("完了", key=f"cp_{a['id']}"):
                     cur.execute("UPDATE assignments SET is_completed = TRUE WHERE id = %s", (a['id'],)); conn.commit(); st.rerun()
 
@@ -174,88 +140,83 @@ try:
 
     # --- タブ4: 💰 給与実績 ---
     with tab4:
-        st.subheader("💰 アルバイト給与サマリー")
-        first_day_month = today.replace(day=1)
+        st.subheader("💰 バイト別・月別給与サマリー")
         first_day_year = today.replace(month=1, day=1)
         
-        # 1. 月間・年間の仕事別合計を取得
+        # 1. 今年の全実績データを取得
         cur.execute("""
-            SELECT job_name, SUM(pay_amount) as total 
+            SELECT job_name, pay_amount, work_date 
             FROM work_results 
-            WHERE work_date >= %s 
-            GROUP BY job_name
-        """, (first_day_month.isoformat(),))
-        month_stats = {row['job_name']: row['total'] for row in cur.fetchall()}
-
-        cur.execute("""
-            SELECT job_name, SUM(pay_amount) as total 
-            FROM work_results 
-            WHERE work_date >= %s 
-            GROUP BY job_name
+            WHERE work_date >= %s
         """, (first_day_year.isoformat(),))
-        year_stats = {row['job_name']: row['total'] for row in cur.fetchall()}
-
-        # 2. 全体メトリクス（最上部）
-        m_total_all = sum(month_stats.values())
-        y_total_all = sum(year_stats.values())
+        all_work = cur.fetchall()
         
-        met1, met2 = st.columns(2)
-        met1.metric(f"{today.month}月の総稼ぎ", f"¥{m_total_all:,}")
-        met2.metric(f"{today.year}年の総稼ぎ", f"¥{y_total_all:,}")
-        
-        st.divider()
-
-        # 3. アルバイト別集計表（ここが今回のメイン）
-        st.subheader("📊 バイト別・集計比較")
-        
-        # データベースにある全仕事名をユニークに取得
-        all_jobs = sorted(list(set(list(month_stats.keys()) + list(year_stats.keys()))))
-        
-        if not all_jobs:
-            st.info("集計データがまだありません。")
+        if not all_work:
+            st.info("今年の実績データはまだありません。")
         else:
-            summary_data = []
-            for job in all_jobs:
-                m_val = month_stats.get(job, 0)
-                y_val = year_stats.get(job, 0)
-                summary_data.append({
-                    "アルバイト名": job,
-                    f"{today.month}月の稼ぎ": f"¥{m_val:,}",
-                    f"{today.year}年の合計": f"¥{y_val:,}"
-                })
+            # Pandasでマトリックス表を作成
+            df_all = pd.DataFrame([dict(r) for r in all_work])
+            df_all['月'] = pd.to_datetime(df_all['work_date']).dt.month
             
-            # DataFrameに変換して表示
-            df_summary = pd.DataFrame(summary_data)
-            st.table(df_summary)
+            # 月別・バイト別のピボットテーブル作成
+            # インデックス: バイト名, カラム: 月, 値: 給料合計
+            pivot_table = df_all.pivot_table(
+                index='job_name', 
+                columns='月', 
+                values='pay_amount', 
+                aggfunc='sum', 
+                fill_value=0
+            )
+
+            # カラム名を「1月」「2月」形式に
+            pivot_table.columns = [f"{c}月" for c in pivot_table.columns]
+            
+            # 💡 右端に「年間合計」を追加
+            pivot_table['年間合計'] = pivot_table.sum(axis=1)
+            
+            # 💡 下端に「月間合計」を追加
+            pivot_table.loc['月間合計(全体)'] = pivot_table.sum()
+            
+            # 金額表示を見やすく整形
+            formatted_table = pivot_table.applymap(lambda x: f"¥{x:,}")
+            st.table(formatted_table)
+
+            # 今月の合計と今年の総計をメトリクスで表示
+            this_month_col = f"{today.month}月"
+            m_total = pivot_table[this_month_col].loc['月間合計(全体)'] if this_month_col in pivot_table.columns else 0
+            y_total = pivot_table['年間合計'].loc['月間合計(全体)']
+            
+            c_met1, c_met2 = st.columns(2)
+            c_met1.metric(f"{today.month}月の総収入", f"¥{int(m_total):,}")
+            c_met2.metric(f"{today.year}年の総計", f"¥{int(y_total):,}")
 
         st.divider()
-
-        # 4. 日別実績詳細
-        st.subheader("🗓 今月の日別実績詳細")
-        cur.execute("SELECT * FROM work_results WHERE work_date >= %s ORDER BY work_date DESC", (first_day_month.isoformat(),))
-        work_data = cur.fetchall()
-        if work_data:
-            df_detail = pd.DataFrame([dict(r) for r in work_data])
-            st.table(df_detail[['work_date', 'job_name', 'actual_start', 'actual_end', 'pay_amount']])
-        else:
-            st.info("今月の日別データはありません。")
+        st.subheader("🗓 今月の詳細実績")
+        cur.execute("""
+            SELECT work_date, job_name, actual_start, actual_end, pay_amount 
+            FROM work_results 
+            WHERE work_date >= %s 
+            ORDER BY work_date DESC
+        """, (today.replace(day=1).isoformat(),))
+        this_month_detail = cur.fetchall()
+        if this_month_detail:
+            st.table(pd.DataFrame([dict(r) for r in this_month_detail]))
 
     # --- タブ5: 🚀 一括登録 ---
     with tab5:
-        st.subheader("🚀 予定リストを一括流し込み")
-        bulk_text = st.text_area("形式: 4/15 1 消化器内科", height=300)
-        if st.button("一括登録を実行", type="primary"):
+        st.subheader("🚀 講義予定を一括登録")
+        bulk_text = st.text_area("形式: 4/15 1 消化器内科", height=200)
+        if st.button("実行", type="primary"):
             if bulk_text:
-                lines = bulk_text.strip().split('\n')
-                success_count = 0
-                for line in lines:
+                count = 0
+                for line in bulk_text.strip().split('\n'):
                     match = re.search(r'(\d+)[/月](\d+)日?\s*(\d+)限?\s*(.+)', line)
                     if match:
                         m, d, p, s = match.groups()
-                        t_date = date(2026, int(m), int(d))
-                        cur.execute("INSERT INTO attendance (date, period, subject_name, status) VALUES (%s, %s, %s, '予定')", (t_date.isoformat(), int(p), s.strip()))
-                        success_count += 1
-                conn.commit(); st.success(f"✅ {success_count}件 登録成功！"); st.rerun()
+                        cur.execute("INSERT INTO attendance (date, period, subject_name, status) VALUES (%s, %s, %s, '予定')", 
+                                    (date(today.year, int(m), int(d)), int(p), s.strip()))
+                        count += 1
+                conn.commit(); st.success(f"✅ {count}件登録！"); st.rerun()
 
     cur.close(); conn.close()
 

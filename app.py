@@ -114,6 +114,25 @@ try:
                     start = life['start_time'].strftime('%H:%M') if life['start_time'] else ""
                     end = f"〜{life['end_time'].strftime('%H:%M')}" if life['end_time'] else ""
                     st.warning(f"⏰ {start}{end}\n\n{life['detail']}")
+            
+            # 💡ここを復元：明日以降の直近の予定を表示するセクション
+            st.divider()
+            st.subheader("🔜 今後のお楽しみ・予定")
+            cur.execute("""
+                SELECT * FROM lifestyle_schedules 
+                WHERE event_date > %s 
+                ORDER BY event_date ASC, start_time ASC 
+                LIMIT 7
+            """, (selected_date.isoformat(),))
+            upcoming = cur.fetchall()
+            
+            if upcoming:
+                for u in upcoming:
+                    u_start = u['start_time'].strftime('%H:%M') if u['start_time'] else ""
+                    u_time_str = f" {u_start}〜" if u_start else ""
+                    st.write(f"・**{u['event_date'].strftime('%m/%d')}**: {u['detail']}{u_time_str}")
+            else:
+                st.caption("直近の予定はまだありません。")
 
     # --- タブ2: 提出物 ---
     with tab2:
@@ -180,7 +199,7 @@ try:
             c_met1.metric(f"{today.month}月の総収入", f"¥{int(m_total):,}")
             c_met2.metric(f"{today.year}年の総計", f"¥{int(y_total):,}")
 
-        # 💡ここから変更：月を選択して稼働実績を確認できるセクション
+        # 月を選択して稼働実績を確認できるセクション
         st.divider()
         st.subheader("🗓 月別・稼働実績の確認")
         st.caption("確認したい年月を選択してください。その月に働いた日と時間が一覧表示されます。")

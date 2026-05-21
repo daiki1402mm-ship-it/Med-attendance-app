@@ -112,8 +112,8 @@ try:
 
         st.divider()
 
-        # タブ表示
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(["🗓 本日の予定", "📝 提出物", "⚖️ 試験日程", "💰 給与実績", "🚀 一括登録"])
+        # タブ表示（「給与実績」から「収支・給与実績」へ拡張）
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["🗓 本日の予定", "📝 提出物", "⚖️ 試験日程", "💰 収支・給与実績", "🚀 一括登録"])
 
         # --- タブ1: 本日の予定（講義 ＋ プライベート） ---
         with tab1:
@@ -193,50 +193,121 @@ try:
             if exams: st.table(pd.DataFrame([dict(e) for e in exams])[['exam_date', 'subject_name', 'location']])
             else: st.info("試験予定なし")
 
-        # --- タブ4: 💰 給与実績 ---
+        # --- タブ4: 💰 収支・給与実績（旧 給与実績） ---
         with tab4:
-            st.subheader("🚀 Project Lyra 収益・納税サマリー")
+            st.subheader("🚀 Project Lyra 収益・経費・純利益サマリー")
+            
+            # データ取得：報酬
             cur.execute("SELECT * FROM lyra_rewards ORDER BY date DESC")
             lyra_data = cur.fetchall()
-            if lyra_data:
-                df_lyra = pd.DataFrame([dict(r) for r in lyra_data])
-                
-                # Decimal型とfloat型の競合によるTypeErrorを完全に防ぐキャスト
-                total_jpy = float(df_lyra['amount_jpy'].sum())
-                latest_jpy = float(df_lyra.iloc[0]['amount_jpy'])
-                
-                c1, c2, c3 = st.columns(3)
-                c1.metric("合計収益 (円)", f"¥{int(total_jpy):,}")
-                c2.metric("納税ストック(累計)", f"¥{int(total_jpy * 0.3):,}")
-                c3.metric("当日分納税予定", f"¥{int(latest_jpy * 0.3):,}")
-                st.line_chart(df_lyra.set_index('date')['amount_jpy'])
-                st.table(df_lyra[['date', 'amount_usd', 'amount_jpy']])
-            else:
-                st.info("Project Lyra の実績データはまだありません。データが登録されるとサマリーが表示されます。")
             
-            # Project Lyra 実績の手動登録フォーム
-            with st.form("lyra_reward_form"):
-                st.caption("✍️ Project Lyra 報酬の手動入力")
-                col_ly1, col_ly2, col_ly3 = st.columns(3)
-                with col_ly1:
-                    lyra_form_date = st.date_input("獲得日を選択", value=today, key="lyra_form_date")
-                with col_ly2:
-                    lyra_usd = st.number_input("金額 (USD)", min_value=0.0, step=10.0, format="%.2f")
-                with col_ly3:
-                    lyra_jpy = st.number_input("確定円転額 (JPY) ※未円転なら0換算", min_value=0, step=1000)
-                submit_lyra = st.form_submit_button("Lyra実績を登録")
-                
-                if submit_lyra:
-                    if lyra_usd <= 0 and lyra_jpy <= 0:
-                        st.error("金額を入力してください。")
-                    else:
-                        cur.execute(
-                            "INSERT INTO lyra_rewards (date, amount_usd, amount_jpy) VALUES (%s, %s, %s)",
-                            (lyra_form_date.isoformat(), lyra_usd, lyra_jpy)
-                        )
-                        conn.commit()
-                        st.success(f"✅ {lyra_form_date.strftime('%m/%d')}分として ${lyra_usd} / ¥{lyra_jpy:,} を登録しました！")
-                        st.rerun()
+            # データ取得：経費（新規追加）
+            cur.execute("SELECT * FROM expenses ORDER BY date DESC")
+            expense_data = cur.fetchall()
+            
+            df_lyra = pd.DataFrame([dict(r) for r in lyra_data]) if lyra_data else pd.DataFrame()
+            df_exp = pd.DataFrame([dict(e) for e in expense_data]) if expense_data else pd.DataFrame()
+            
+            # 数値の計算処理（型エラーの完全な防衛）
+            total_jpy = float(df_lyra['amount_jpy'].sum()) if not df_lyra.empty else 0.0
+            latest_jpy = float(df_lyra.iloc[0]['amount_jpy']) if not df_lyra.empty else 0.0
+            total_exp = float(df_exp['amount'].sum()) if not df_exp.empty else 0.0
+            
+            # 純利益（Net Profit）の算出
+            net_profit = total_jpy - total_exp
+            profit_rate = (net_profit / total_jpy * 100) if total_jpy > 0 else 0.0
+            
+            # 最上部に統合収支KPIカードを配置
+            c_kpi1, c_kpi2, c_kpi3, c_kpi4 = st.columns(4)
+            c_kpi1.metric("総報酬 (円)", f"¥{int(total_jpy):,}")
+            c_kpi2.metric("総経費 (累計)", f"¥{int(total_exp):,}")
+            
+            # 純利益カード（経費が上回っていれば赤、利益が出ていれば緑っぽく表現）
+            c_kpi3.metric("現在純利益", f"¥{int(net_profit):,}", f"利益率 {profit_rate:.1f}%")
+            # 納税ストックは純利益ベースでの計算（30%）に変更可能ですが、手堅く「報酬ベース」のまま、または実態に合わせて調整可能。
+            # 今回は手堅く「純利益の30%」として算出（※お好みに合わせて変更可能）
+            c_kpi4.metric("納税ストック(利益ベース30%)", f"¥{int(max(0.0, net_profit * 0.3)):,}", f"当日分予定: ¥{int(latest_jpy * 0.3):,}")
+            
+            st.write("---")
+            
+            # グラフと報酬テーブルの表示
+            col_graph_reward, col_graph_expense = st.columns(2)
+            
+            with col_graph_reward:
+                st.markdown("📈 **Project Lyra 収益推移**")
+                if not df_lyra.empty:
+                    st.line_chart(df_lyra.set_index('date')['amount_jpy'])
+                    st.caption("💵 報酬明細（直近）")
+                    st.dataframe(df_lyra[['date', 'amount_usd', 'amount_jpy', 'status']], use_container_width=True)
+                else:
+                    st.info("報酬データがありません。")
+                    
+            with col_graph_expense:
+                st.markdown("📊 **経費カテゴリ比率**")
+                if not df_exp.empty:
+                    # カテゴリごとの合計を計算してドーナツチャート化
+                    df_exp_grouped = df_exp.groupby('category')['amount'].sum().reset_index()
+                    st.bar_chart(df_exp_grouped.set_index('category')['amount']) # Streamlit標準バーチャート
+                    st.caption("🧾 経費明細（直近）")
+                    st.dataframe(df_exp[['date', 'category', 'amount', 'detail']], use_container_width=True)
+                else:
+                    st.info("経費データがありません。")
+
+            # Project Lyra 報酬の手動登録フォーム
+            st.write("---")
+            col_form1, col_form2 = st.columns(2)
+            
+            with col_form1:
+                with st.form("lyra_reward_form"):
+                    st.markdown("✨ **Project Lyra 報酬の手動入力**")
+                    col_ly1, col_ly2, col_ly3 = st.columns(3)
+                    with col_ly1:
+                        lyra_form_date = st.date_input("獲得日を選択", value=today, key="lyra_form_date")
+                    with col_ly2:
+                        lyra_usd = st.number_input("金額 (USD)", min_value=0.0, step=10.0, format="%.2f")
+                    with col_ly3:
+                        lyra_jpy = st.number_input("確定円転額 (JPY) ※未円転なら0換算", min_value=0, step=1000)
+                    submit_lyra = st.form_submit_button("Lyra実績を登録")
+                    
+                    if submit_lyra:
+                        if lyra_usd <= 0 and lyra_jpy <= 0:
+                            st.error("金額を入力してください。")
+                        else:
+                            cur.execute(
+                                "INSERT INTO lyra_rewards (date, amount_usd, amount_jpy) VALUES (%s, %s, %s)",
+                                (lyra_form_date.isoformat(), lyra_usd, lyra_jpy)
+                            )
+                            conn.commit()
+                            st.success(f"✅ {lyra_form_date.strftime('%m/%d')}分として ${lyra_usd} / ¥{lyra_jpy:,} を登録しました！")
+                            st.rerun()
+            
+            with col_form2:
+                with st.form("manual_expense_form"):
+                    st.markdown("💸 **経費データの手動入力**")
+                    col_ex1, col_ex2, col_ex3 = st.columns(3)
+                    with col_ex1:
+                        exp_form_date = st.date_input("利用日を選択", value=today, key="exp_form_date")
+                    with col_ex2:
+                        exp_cat = st.selectbox("カテゴリ", ['医学書・問題集', '交通費', '通信費', '飲食・会議費', '機材・周辺機器', '消耗品費', '家賃・光熱費', 'その他'])
+                    with col_ex3:
+                        exp_amount = st.number_input("金額 (円)", min_value=0, step=500, key="exp_amount")
+                    
+                    exp_detail = st.text_input("詳細（内容や店舗名など）", placeholder="イヤーノート、スタバ打ち合わせなど")
+                    submit_expense = st.form_submit_button("経費を登録")
+                    
+                    if submit_expense:
+                        if exp_amount <= 0:
+                            st.error("0円以上の金額を入力してください。")
+                        elif exp_detail.strip() == "":
+                            st.error("詳細を入力してください。")
+                        else:
+                            cur.execute(
+                                "INSERT INTO expenses (date, category, amount, detail) VALUES (%s, %s, %s, %s)",
+                                (exp_form_date.isoformat(), exp_cat, exp_amount, exp_detail.strip())
+                            )
+                            conn.commit()
+                            st.success(f"✅ {exp_form_date.strftime('%m/%d')}の「{exp_cat}」として ¥{exp_amount:,} を登録しました！")
+                            st.rerun()
 
             st.divider()
 

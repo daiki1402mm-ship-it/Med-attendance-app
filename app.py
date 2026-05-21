@@ -1,6 +1,7 @@
 import streamlit as st
 import psycopg2
 from psycopg2.extras import DictCursor
+import yfinance as yf 
 from datetime import datetime, date, timedelta
 import pytz
 import pandas as pd
@@ -11,6 +12,13 @@ def get_connection():
     return psycopg2.connect(st.secrets["SUPABASE_URI"])
 
 st.set_page_config(page_title="医学生専用ダッシュボード", layout="wide", page_icon="🩺")
+def get_usd_jpy():
+    try:
+        ticker = yf.Ticker("JPY=X")
+        data = ticker.history(period="1d")
+        return data['Close'].iloc[-1]
+    except:
+        return 0
 
 # タイムゾーンと日付の基本設定
 tokyo = pytz.timezone('Asia/Tokyo')
@@ -20,6 +28,8 @@ try:
     conn = get_connection()
     cur = conn.cursor(cursor_factory=DictCursor)
 
+    page = st.sidebar.radio("ページ選択", ["ダッシュボード", "為替分析・円転戦略"])
+    st.sidebar.divider()
     # --- サイドバー：設定・進級管理 ---
     st.sidebar.title("⚙️ 設定・進級管理")
     
@@ -159,6 +169,21 @@ try:
 
     # --- タブ4: 💰 給与実績 ---
     with tab4:
+        st.subheader("🚀 Project Lyra 収益・納税サマリー")
+        cur.execute("SELECT * FROM lyra_rewards ORDER BY date DESC")
+        lyra_data = cur.fetchall()
+        if lyra_data:
+            df_lyra = pd.DataFrame([dict(r) for r in lyra_data])
+            total_jpy = df_lyra['amount_jpy'].sum()
+            latest = df_lyra.iloc[0]
+            c1, c2, c3 = st.columns(3)
+            c1.metric("合計収益 (円)", f"¥{int(total_jpy):,}")
+            c2.metric("納税ストック(累計)", f"¥{int(total_jpy * 0.3):,}")
+            c3.metric("当日分納税予定", f"¥{int(latest['amount_jpy'] * 0.3):,}")
+            st.line_chart(df_lyra.set_index('date')['amount_jpy'])
+            st.table(df_lyra[['date', 'amount_usd', 'amount_jpy']])
+        st.divider()
+
         st.subheader("💰 バイト別・月別給与サマリー")
         first_day_year = today.replace(month=1, day=1)
         
@@ -277,6 +302,22 @@ try:
                                     (date(today.year, int(m), int(d)), int(p), s.strip()))
                         count += 1
                 conn.commit(); st.success(f"✅ {count}件登録！"); st.rerun()
+
+    # --- 為替分析ページ ---
+    elif page == "為替分析・円転戦略":
+        st.title("💱 為替分析・円転戦略")
+        rate = get_usd_jpy()
+        st.metric("現在のドル円レート", f"1 USD = {rate:.2f} JPY")
+        
+        if rate >= 160:
+            st.error("⚠️ 介入警戒ライン(160円)到達！円転の好機かもしれません。")
+        elif rate >= 155:
+            st.warning("👀 監視域：円安傾向です。")
+        
+        st.write("---")
+        st.write("### 戦略メモ")
+        st.write("・片山財務大臣の介入示唆：160円を超えると介入の可能性大。")
+        st.write("・3-8円程度の急激な円高反落を狙った円転タイミングを検討してください。")
 
     cur.close(); conn.close()
 

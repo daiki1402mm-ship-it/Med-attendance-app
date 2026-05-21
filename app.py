@@ -15,9 +15,12 @@ st.set_page_config(page_title="医学生専用ダッシュボード", layout="wi
 
 def get_usd_jpy():
     try:
-        ticker = yf.Ticker("JPY=X")
-        data = ticker.history(period="1d")
-        return data['Close'].iloc[-1]
+        # yf.download を使用し、直近3日分のデータをまとめて取得（確実性を上げるため）
+        data = yf.download("JPY=X", period="3d", interval="1d", progress=False)
+        if not data.empty and 'Close' in data.columns:
+            # 最新の終値を取得
+            return float(data['Close'].iloc[-1])
+        return 0
     except:
         return 0
 
@@ -131,7 +134,7 @@ try:
                         end = f"〜{life['end_time'].strftime('%H:%M')}" if life['end_time'] else ""
                         st.warning(f"⏰ {start}{end}\n\n{life['detail']}")
                 
-                # 💡ここを復元：明日以降の直近の予定を表示するセクション
+                # 明日以降の直近の予定を表示するセクション
                 st.divider()
                 st.subheader("🔜 今後のお楽しみ・予定")
                 cur.execute("""
@@ -188,6 +191,8 @@ try:
                 c3.metric("当日分納税予定", f"¥{int(latest['amount_jpy'] * 0.3):,}")
                 st.line_chart(df_lyra.set_index('date')['amount_jpy'])
                 st.table(df_lyra[['date', 'amount_usd', 'amount_jpy']])
+            else:
+                st.info("Project Lyra の実績データはまだありません。データが登録されるとサマリーが表示されます。")
             st.divider()
 
             st.subheader("💰 バイト別・月別給与サマリー")
@@ -315,12 +320,17 @@ try:
     elif page == "為替分析・円転戦略":
         st.title("💱 為替分析・円転戦略")
         rate = get_usd_jpy()
-        st.metric("現在のドル円レート", f"1 USD = {rate:.2f} JPY")
         
-        if rate >= 160:
-            st.error("⚠️ 介入警戒ライン(160円)到達！円転の好機かもしれません。")
-        elif rate >= 155:
-            st.warning("👀 監視域：円安傾向です。")
+        # もしレートが0円の場合のフォールバック表示
+        if rate == 0:
+            st.error("データの取得に失敗しました。時間をおいて再読み込みするか、SBI証券等のアプリで直接レートをご確認ください。")
+        else:
+            st.metric("現在のドル円レート", f"1 USD = {rate:.2f} JPY")
+            
+            if rate >= 160:
+                st.error("⚠️ 介入警戒ライン(160円)到達！円転の好機かもしれません。")
+            elif rate >= 155:
+                st.warning("👀 監視域：円安傾向です。")
         
         st.write("---")
         st.write("### 戦略メモ")

@@ -6,6 +6,8 @@ from datetime import datetime, date, timedelta
 import pytz
 import pandas as pd
 import re
+import urllib.request
+import json
 
 # 1. データベース接続設定
 def get_connection():
@@ -14,13 +16,28 @@ def get_connection():
 st.set_page_config(page_title="医学生専用ダッシュボード", layout="wide", page_icon="🩺")
 
 def get_usd_jpy():
+    # パターン1: yfinanceによる取得試行（マルチインデックス対策版）
     try:
-        # yf.download を使用し、直近3日分のデータをまとめて取得（確実性を上げるため）
-        data = yf.download("JPY=X", period="3d", interval="1d", progress=False)
-        if not data.empty and 'Close' in data.columns:
-            # 最新の終値を取得
-            return float(data['Close'].iloc[-1])
-        return 0
+        data = yf.download("JPY=X", period="5d", interval="1d", progress=False)
+        if not data.empty:
+            close_series = data['Close']
+            if isinstance(close_series, pd.DataFrame):
+                val = close_series.iloc[-1, 0]
+            else:
+                val = close_series.iloc[-1]
+            if float(val) > 0:
+                return float(val)
+    except:
+        pass
+
+    # パターン2: yfinanceが制限された場合のオープンAPIバックアップ
+    try:
+        url = "https://open.er-api.com/v6/latest/USD"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req) as response:
+            res_data = json.loads(response.read().decode())
+            rate = res_data["rates"]["JPY"]
+            return float(rate)
     except:
         return 0
 
@@ -183,16 +200,44 @@ try:
             lyra_data = cur.fetchall()
             if lyra_data:
                 df_lyra = pd.DataFrame([dict(r) for r in lyra_data])
-                total_jpy = df_lyra['amount_jpy'].sum()
-                latest = df_lyra.iloc[0]
+                
+                # Decimal型とfloat型の競合によるTypeErrorを完全に防ぐキャスト
+                total_jpy = float(df_lyra['amount_jpy'].sum())
+                latest_jpy = float(df_lyra.iloc[0]['amount_jpy'])
+                
                 c1, c2, c3 = st.columns(3)
                 c1.metric("合計収益 (円)", f"¥{int(total_jpy):,}")
                 c2.metric("納税ストック(累計)", f"¥{int(total_jpy * 0.3):,}")
-                c3.metric("当日分納税予定", f"¥{int(latest['amount_jpy'] * 0.3):,}")
+                c3.metric("当日分納税予定", f"¥{int(latest_jpy * 0.3):,}")
                 st.line_chart(df_lyra.set_index('date')['amount_jpy'])
                 st.table(df_lyra[['date', 'amount_usd', 'amount_jpy']])
             else:
                 st.info("Project Lyra の実績データはまだありません。データが登録されるとサマリーが表示されます。")
+            
+            # Project Lyra 実績の手動登録フォーム
+            with st.form("lyra_reward_form"):
+                st.caption("✍️ Project Lyra 報酬の手動入力")
+                col_ly1, col_ly2, col_ly3 = st.columns(3)
+                with col_ly1:
+                    lyra_form_date = st.date_input("獲得日を選択", value=today, key="lyra_form_date")
+                with col_ly2:
+                    lyra_usd = st.number_input("金額 (USD)", min_value=0.0, step=10.0, format="%.2f")
+                with col_ly3:
+                    lyra_jpy = st.number_input("確定円転額 (JPY) ※未円転なら0換算", min_value=0, step=1000)
+                submit_lyra = st.form_submit_button("Lyra実績を登録")
+                
+                if submit_lyra:
+                    if lyra_usd <= 0 and lyra_jpy <= 0:
+                        st.error("金額を入力してください。")
+                    else:
+                        cur.execute(
+                            "INSERT INTO lyra_rewards (date, amount_usd, amount_jpy) VALUES (%s, %s, %s)",
+                            (lyra_form_date.isoformat(), lyra_usd, lyra_jpy)
+                        )
+                        conn.commit()
+                        st.success(f"✅ {lyra_form_date.strftime('%m/%d')}分として ${lyra_usd} / ¥{lyra_jpy:,} を登録しました！")
+                        st.rerun()
+
             st.divider()
 
             st.subheader("💰 バイト別・月別給与サマリー")

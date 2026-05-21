@@ -1,3 +1,7 @@
-streamlit
+Streamlit
 psycopg2-binary
 pytz
+pandas
+yfinance
+line-bot-sdk
+cryptography

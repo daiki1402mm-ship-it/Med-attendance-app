@@ -11,15 +11,14 @@ import urllib.request
 import urllib.parse  
 import json
 
-# 🚨 【最優先・絶対防衛圏】一番最初（何よりも前）にページ設定を実行する
+# 🚨 一番最初（何よりも前）にページ設定を実行する
 st.set_page_config(page_title="医学生専用ダッシュボード", layout="wide", page_icon="🩺")
 
-# 1. データベース接続設定 (st.set_page_config より後に実行するため安全)
+# 1. データベース接続設定
 def get_connection():
     return psycopg2.connect(st.secrets["SUPABASE_URI"])
 
 def get_usd_jpy():
-    # パターン1: yfinanceによる取得試行（マルチインデックス対策版）
     try:
         data = yf.download("JPY=X", period="5d", interval="1d", progress=False)
         if not data.empty:
@@ -33,7 +32,6 @@ def get_usd_jpy():
     except:
         pass
 
-    # パターン2: yfinanceが制限された場合のオープンAPIバックアップ
     try:
         url = "https://open.er-api.com/v6/latest/USD"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -50,12 +48,10 @@ def load_total_data():
     spreadsheet_id = "13dg65zF2hcsKe42QJ2Fqz9GfXryaw2En4hPJKLG_Yes"
     sheet_name = "統合（税金関連その他）"
     
-    # 日本語をWeb安全な文字（%xx形式）に変換してasciiエラーを完全に防ぐ
     encoded_sheet_name = urllib.parse.quote(sheet_name)
     url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/gviz/tq?tqx=out:csv&sheet={encoded_sheet_name}"
     
     try:
-        # サーバーエラーを避けるためにブラウザのフリをするヘッダーを付与
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req) as response:
             df = pd.read_csv(response)
@@ -139,7 +135,7 @@ try:
         # タブ表示
         tab1, tab2, tab3, tab4, tab5 = st.tabs(["🗓 本日の予定", "📝 提出物", "⚖️ 試験日程", "💰 収支・給与実績", "🚀 一括登録"])
 
-        # --- タブ1: 本日の予定（講義 ＋ プライベート） ---
+        # --- タブ1: 本日の予定 ---
         with tab1:
             selected_date = st.date_input("表示日を選択", value=today, key="view_date")
             cur.execute("SELECT * FROM attendance WHERE date = %s ORDER BY period ASC", (selected_date.isoformat(),))
@@ -175,7 +171,6 @@ try:
                         end = f"〜{life['end_time'].strftime('%H:%M')}" if life['end_time'] else ""
                         st.warning(f"⏰ {start}{end}\n\n{life['detail']}")
                 
-                # 明日以降の直近の予定を表示するセクション
                 st.divider()
                 st.subheader("🔜 今後のお楽しみ・予定")
                 cur.execute("""
@@ -244,7 +239,6 @@ try:
             c_kpi4.metric("納税ストック(利益ベース30%)", f"¥{int(max(0.0, net_profit * 0.3)):,}", f"当日分予定: ¥{int(latest_jpy * 0.3):,}")
             
             st.write("---")
-            
             col_graph_reward, col_graph_expense = st.columns(2)
             
             with col_graph_reward:
@@ -322,7 +316,6 @@ try:
                             st.rerun()
 
             st.divider()
-
             st.subheader("💰 バイト別・月別給与サマリー")
             first_day_year = today.replace(month=1, day=1)
             
@@ -340,13 +333,8 @@ try:
                 df_all['月'] = pd.to_datetime(df_all['work_date']).dt.month
                 
                 pivot_table = df_all.pivot_table(
-                    index='job_name', 
-                    columns='月', 
-                    values='pay_amount', 
-                    aggfunc='sum', 
-                    fill_value=0
+                    index='job_name', columns='月', values='pay_amount', aggfunc='sum', fill_value=0
                 )
-
                 pivot_table.columns = [f"{c}月" for c in pivot_table.columns]
                 pivot_table['年間合計'] = pivot_table.sum(axis=1)
                 pivot_table.loc['月間合計(全体)'] = pivot_table.sum()
@@ -364,7 +352,6 @@ try:
 
             st.divider()
             st.subheader("🗓 月別・稼働実績の確認")
-            
             col_y, col_m = st.columns([1, 1])
             with col_y:
                 view_year = st.selectbox("年を選択", [today.year, today.year - 1], index=0)
@@ -372,10 +359,7 @@ try:
                 view_month = st.selectbox("月を選択", list(range(1, 13)), index=today.month - 1)
                 
             view_start = date(view_year, view_month, 1)
-            if view_month == 12:
-                view_end = date(view_year + 1, 1, 1)
-            else:
-                view_end = date(view_year, view_month + 1, 1)
+            view_end = date(view_year + 1, 1, 1) if view_month == 12 else date(view_year, view_month + 1, 1)
 
             cur.execute("""
                 SELECT work_date, job_name, actual_start, actual_end, pay_amount 
@@ -392,7 +376,6 @@ try:
 
             st.divider()
             st.subheader("✍️ 過去・その他給与の手入力")
-            
             with st.form("manual_salary_form"):
                 col_d, col_j, col_a = st.columns([1, 1, 1])
                 with col_d:
@@ -403,7 +386,6 @@ try:
                     manual_amount = st.number_input("金額 (円)", min_value=0, step=1000)
                     
                 manual_job_custom = st.text_input("※「その他」を選んだ場合のみ、ここにバイト名を入力", "")
-                
                 submit_manual = st.form_submit_button("給与実績を登録")
                 
                 if submit_manual:
@@ -421,7 +403,7 @@ try:
                         st.success(f"✅ {manual_date.strftime('%m/%d')}の「{final_job_name}」に ¥{manual_amount:,} を登録しました！")
                         st.rerun()
 
-        # --- タブ5: 🚀 一括登録 ---
+        # --- タブ5: 一括登録 ---
         with tab5:
             st.subheader("🚀 講義予定を一括登録")
             bulk_text = st.text_area("形式: 4/15 1 消化器内科", height=200)
@@ -443,7 +425,6 @@ try:
     elif page == "為替分析・円転戦略":
         st.title("💱 為替分析 ＆ 📊 Lyra投資戦略コックピット")
         
-        # 1. 為替セクション
         rate = get_usd_jpy()
         if rate == 0:
             st.error("データの取得に失敗しました。時間をおいて再読み込みするか、SBI証券等のアプリで直接レートをご確認ください。")
@@ -455,18 +436,14 @@ try:
                 st.warning("👀 監視域：円安傾向です。")
         
         st.write("---")
-        
-        # 2. リアルタイム投資戦略セクション
         st.subheader("🛡️ 資産配分・現金余力マネジメント")
         st.caption("Project Lyraの純利益を元手に、現在の「リアルタイム投資可能余力」と「現物待機資金（フリーキャッシュ）」を自動算出します。")
         
-        # 投資原資となるLyraのデータを集計
         cur.execute("SELECT amount_jpy FROM lyra_rewards")
         r_data = cur.fetchall()
         cur.execute("SELECT amount FROM expenses")
         e_data = cur.fetchall()
         
-        # 新方式：investment_logsからこれまでの投資総額（累計額）をリアルタイムに自動合計する
         cur.execute("SELECT amount FROM investment_logs")
         i_logs_data = cur.fetchall()
         actual_invested = sum([int(il['amount']) for il in i_logs_data]) if i_logs_data else 0
@@ -474,12 +451,10 @@ try:
         lyra_total = sum([float(r['amount_jpy']) for r in r_data]) if r_data else 0.0
         exp_total = sum([float(e['amount']) for e in e_data]) if e_data else 0.0
         
-        # 投資可能総余力の自動計算 (純利益 - 納税30%)
         net_prof = lyra_total - exp_total
         tax_stk = net_prof * 0.3 if net_prof > 0 else 0.0
         auto_investment_capacity = max(0.0, net_prof - tax_stk)
         
-        # DBから投資戦略の最新設定（目標・メモ）を取得
         cur.execute("SELECT monthly_investment_target, strategy_notes FROM investment_strategies WHERE id = 1")
         strategy_res = cur.fetchone()
         
@@ -490,10 +465,8 @@ try:
             monthly_target = 0
             notes = '現金余力重視。チャンスを待つ。'
             
-        # 現在待機資金の自動計算 = 投資可能総余力 - 投資ログの累計実績
         free_cash = auto_investment_capacity - actual_invested
         
-        # KPIカードの横並び配置
         col_inv1, col_inv2, col_inv3, col_inv4 = st.columns(4)
         col_inv1.metric("総資産・投資可能総余力", f"¥{int(auto_investment_capacity):,}")
         col_inv2.metric("現物投資 累計実績", f"¥{int(actual_invested):,}")
@@ -504,24 +477,16 @@ try:
             col_inv3.metric("現在待機資金 (自由枠)", f"¥{int(free_cash):,}", "余力なし・入金待ち", delta_color="inverse")
             
         col_inv4.metric("今月の目標積立額", f"¥{int(monthly_target):,}")
-        
-        # 戦略メモボードの描画
         st.info(f"💡 **現在の配分比率・戦略メモ**\n\n{notes}")
-        
         st.write("---")
         
-        # 投資戦略の上書き・手動更新フォーム
         with st.form("investment_strategy_form"):
             st.markdown("✍️ **投資戦略・実績データの更新設定**")
-            st.caption("今月の積立目標や、脳内戦略メモをここにアップデートしてください。")
-            
             new_target = st.number_input("今月の目標積立額 (円)", min_value=0, value=int(monthly_target), step=5000)
             new_notes = st.text_area("配分比率・戦略メモ", value=notes, placeholder="例: キャッシュ比率7割維持。150円以下で現物買い全力。")
-            
             submit_strategy = st.form_submit_button("投資戦略を更新・スプレッドシートへ同期")
             
             if submit_strategy:
-                # 累計額はログから自動集計されるため、ここでは目標とメモのみをUPDATE
                 cur.execute("""
                     INSERT INTO investment_strategies (id, monthly_investment_target, strategy_notes, updated_at)
                     VALUES (1, %s, %s, NOW())
@@ -531,82 +496,65 @@ try:
                         updated_at = NOW()
                 """, (new_target, new_notes.strip()))
                 conn.commit()
-                st.success("✅ 投資戦略を更新しました！スプレッドシートの『投資戦略』シートへリアルタイム自動同期がトリガーされました。")
+                st.success("✅ 投資戦略を更新しました！")
                 st.rerun()
 
-        st.write("---")
-        st.subheader("📌 為替戦略メモ")
-        st.write("・片山財務大臣の介入示唆：160円を超えると介入の可能性大。")
-        st.write("・3-8円程度の急激な円高反落を狙った円転タイミングを検討してください。")
-
     # ==========================================
-    # 👑 新設：全体統合アナリティクス ページ
+    # 👑 新設：全体統合アナリティクス ページ (★データクレンジング防衛強化)
     # ==========================================
     elif page == "全体統合アナリティクス":
         st.title("🦅 全体統合財務アナリティクス")
         st.caption("Lyra報酬、経費、各種バイト代をすべて月別に集計した個人最高財務責任者（CFO）コックピット画面です。")
         st.write("---")
         
-        # 統合データのロード
         df_total = load_total_data()
         
         if not df_total.empty:
-            # 現在の月を基準としたデフォルト表示処理（インデックスを0〜11に合わせる）
             current_month_idx = datetime.now(tokyo).month - 1
             
-            # 安全ガード: 12行分正しくロードできているか確認
             if len(df_total) > current_month_idx:
-                # データのデータ型をきれいに数値変換（カンマや空白エラーのディフェンス）
                 df_chart = df_total.copy()
                 numeric_cols = ['売上合計', '経費合計', '推定納税額', '実行納税額', '投資余力', '純資産推移', 'バイト給与合計', '月間総利益', 'フリー待機資金']
-                for col in numeric_cols:
-                    df_chart[col] = pd.to_numeric(df_chart[col], errors='coerce').fillna(0)
                 
-                # 月選択セレクター
+                # ★【超重要ディフェンス】：未入力のゴミ（空文字やカンマなど）を完全に0リセットしてエラーを消滅させる
+                for col in numeric_cols:
+                    if col in df_chart.columns:
+                        df_chart[col] = df_chart[col].astype(str).str.replace('¥', '').str.replace(',', '').str.strip()
+                        df_chart[col] = pd.to_numeric(df_chart[col], errors='coerce').fillna(0).astype(int)
+                
                 selected_month_name = st.selectbox("確認する月を選択", df_chart['月'].tolist(), index=current_month_idx)
                 month_data = df_chart[df_chart['月'] == selected_month_name].iloc[0]
                 
                 st.markdown(f"### 📅 {month_data['月']} の確定財務ステータス")
                 
-                # 1. KPIサマリーカードの横並び配置
                 col_cfo1, col_cfo2, col_cfo3, col_cfo4 = st.columns(4)
                 col_cfo1.metric(label="🔌 Lyra売上合計", value=f"¥{int(month_data['売上合計']):,}")
                 col_cfo2.metric(label="💸 経費合計", value=f"¥{int(month_data['経費合計']):,}")
                 col_cfo3.metric(label="📝 バイト給与合計", value=f"¥{int(month_data['バイト給与合計']):,}")
                 
-                # 真の月間総利益
                 total_net = month_data['月間総利益']
                 col_cfo4.metric(label="👑 真の月間総利益", value=f"¥{int(total_net):,}", 
                                 delta=f"内、税ストック推定: -¥{int(month_data['推定納税額']):,}", delta_color="inverse")
                 
                 st.write("---")
-                
-                # 2. 月別の棒グラフ (売上 vs バイト代 vs 経費)
                 st.markdown("### 📈 月別・収益およびコストのバランス推移")
-                
-                # Streamlit標準のbar_chart用にデータを成形
                 df_bar_data = df_chart.set_index('月')[['売上合計', 'バイト給与合計', '経費合計']]
                 st.bar_chart(df_bar_data, height=350)
                 
                 st.write("---")
-                
-                # 3. 純資産（累積投資可能余力）のエリアチャート
                 st.markdown("### 🛡️ 純資産（累積投資可能余力）の成長推移曲線")
                 df_area_data = df_chart.set_index('月')[['純資産推移', 'フリー待機資金']]
                 st.area_chart(df_area_data, height=300)
                 
-                # 4. データテーブル展開用
                 st.write("---")
                 with st.expander("📄 『統合（税金関連その他）』シートの年間生データを一覧確認"):
-                    # 表示用に綺麗にカンマ表記フォーマット
-                    df_disp = df_total.copy()
-                    st.dataframe(df_disp, use_container_width=True)
+                    st.dataframe(df_total, use_container_width=True)
             else:
-                st.warning("シートデータが12ヶ月分不足しているか、行の構造が不完全です。スプレッドシートの行を確認してください。")
+                st.warning("シートデータの構造が不完全です。スプレッドシートをご確認ください。")
         else:
-            st.info("統合シートにまだデータが蓄積されていません。LINE BotからLyra実績や経費が登録されると自動生成されます。")
+            st.info("統合シートにまだデータが蓄積されていません。")
 
-    cur.execute("COMMIT") # トランザクション保護
+    cur.execute("COMMIT") 
     cur.close(); conn.close()
 
 except Exception as e:

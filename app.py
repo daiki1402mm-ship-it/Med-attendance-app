@@ -41,6 +41,19 @@ def get_usd_jpy():
     except:
         return 0
 
+# 💡 CSV経由で「統合（税金関連その他）」シートをロードする関数
+@st.cache_data(ttl=10)
+def load_total_data():
+    spreadsheet_id = "13dg65zF2hcsKe42QJ2Fqz9GfXryaw2En4hPJKLG_Yes"
+    sheet_name = "統合（税金関連その他）"
+    url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/gviz/tq?tqx=out:csv&sheet={sheet_name}"
+    try:
+        df = pd.read_csv(url)
+        return df
+    except Exception as e:
+        st.error(f"統合シートの読み込みに失敗しました: {e}")
+        return pd.DataFrame()
+
 # タイムゾーンと日付の基本設定
 tokyo = pytz.timezone('Asia/Tokyo')
 today = datetime.now(tokyo).date()
@@ -49,7 +62,8 @@ try:
     conn = get_connection()
     cur = conn.cursor(cursor_factory=DictCursor)
 
-    page = st.sidebar.radio("ページ選択", ["ダッシュボード", "為替分析・円転戦略"])
+    # ★ページ選択肢に「全体統合アナリティクス」を追加
+    page = st.sidebar.radio("ページ選択", ["ダッシュボード", "為替分析・円転戦略", "全体統合アナリティクス"])
     st.sidebar.divider()
     # --- サイドバー：設定・進級管理 ---
     st.sidebar.title("⚙️ 設定・進級管理")
@@ -414,7 +428,7 @@ try:
                     conn.commit(); st.success(f"✅ {count}件登録！"); st.rerun()
 
     # ==========================================
-    # 為替分析・投資戦略ページ（★大幅拡張・統合）
+    # 為替分析・投資戦略ページ
     # ==========================================
     elif page == "為替分析・円転戦略":
         st.title("💱 為替分析 ＆ 📊 Lyra投資戦略コックピット")
@@ -514,6 +528,73 @@ try:
         st.subheader("📌 為替戦略メモ")
         st.write("・片山財務大臣の介入示唆：160円を超えると介入の可能性大。")
         st.write("・3-8円程度の急激な円高反落を狙った円転タイミングを検討してください。")
+
+    # ==========================================
+    # 👑 新設：全体統合アナリティクス ページ
+    # ==========================================
+    elif page == "全体統合アナリティクス":
+        st.title("🦅 全体統合財務アナリティクス")
+        st.caption("Lyra報酬、経費、各種バイト代をすべて月別に集計した個人最高財務責任者（CFO）コックピット画面です。")
+        st.write("---")
+        
+        # 統合データのロード
+        df_total = load_total_data()
+        
+        if not df_total.empty:
+            # 現在の月を基準としたデフォルト表示処理（インデックスを0〜11に合わせる）
+            current_month_idx = datetime.now(tokyo).month - 1
+            
+            # 安全ガード: 12行分正しくロードできているか確認
+            if len(df_total) > current_month_idx:
+                # データのデータ型をきれいに数値変換（カンマや空白エラーのディフェンス）
+                df_chart = df_total.copy()
+                numeric_cols = ['売上合計', '経費合計', '推定納税額', '実行納税額', '投資余力', '純資産推移', 'バイト給与合計', '月間総利益', 'フリー待機資金']
+                for col in numeric_cols:
+                    df_chart[col] = pd.to_numeric(df_chart[col], errors='coerce').fillna(0)
+                
+                # 月選択セレクター
+                selected_month_name = st.selectbox("確認する月を選択", df_chart['月'].tolist(), index=current_month_idx)
+                month_data = df_chart[df_chart['月'] == selected_month_name].iloc[0]
+                
+                st.markdown(f"### 📅 {month_data['月']} の確定財務ステータス")
+                
+                # 1. KPIサマリーカードの横並び配置
+                col_cfo1, col_cfo2, col_cfo3, col_cfo4 = st.columns(4)
+                col_cfo1.metric(label="🔌 Lyra売上合計", value=f"¥{int(month_data['売上合計']):,}")
+                col_cfo2.metric(label="💸 経費合計", value=f"¥{int(month_data['経費合計']):,}")
+                col_cfo3.metric(label="📝 バイト給与合計", value=f"¥{int(month_data['バイト給与合計']):,}")
+                
+                # 真の月間総利益
+                total_net = month_data['月間総利益']
+                col_cfo4.metric(label="👑 真の月間総利益", value=f"¥{int(total_net):,}", 
+                                delta=f"内、税ストック推定: -¥{int(month_data['推定納税額']):,}", delta_color="inverse")
+                
+                st.write("---")
+                
+                # 2. 月別の棒グラフ (売上 vs バイト代 vs 経費)
+                st.markdown("### 📈 月別・収益およびコストのバランス推移")
+                
+                # Streamlit標準のbar_chart用にデータを成形
+                df_bar_data = df_chart.set_index('月')[['売上合計', 'バイト給与合計', '経費合計']]
+                st.bar_chart(df_bar_data, height=350)
+                
+                st.write("---")
+                
+                # 3. 純資産（累積投資可能余力）のエリアチャート
+                st.markdown("### 🛡️ 純資産（累積投資可能余力）の成長推移曲線")
+                df_area_data = df_chart.set_index('月')[['純資産推移', 'フリー待機資金']]
+                st.area_chart(df_area_data, height=300)
+                
+                # 4. データテーブル展開用
+                st.write("---")
+                with st.expander("📄 『統合（税金関連その他）』シートの年間生データを一覧確認"):
+                    # 表示用に綺麗にカンマ表記フォーマット
+                    df_disp = df_total.copy()
+                    st.dataframe(df_disp, use_container_width=True)
+            else:
+                st.warning("シートデータが12ヶ月分不足しているか、行の構造が不完全です。スプレッドシートの行を確認してください。")
+        else:
+            st.info("統合シートにまだデータが蓄積されていません。LINE BotからLyra実績や経費が登録されると自動生成されます。")
 
     cur.close(); conn.close()
 

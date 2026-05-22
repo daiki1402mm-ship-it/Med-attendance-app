@@ -1,3 +1,4 @@
+import streamlit as st
 import os
 import re
 import psycopg2
@@ -6,16 +7,16 @@ import yfinance as yf
 from datetime import datetime, date, timedelta
 import pytz
 import pandas as pd
-import re
 import urllib.request
-import urllib.parse  # 💡 URLエンコード用にインポートを追加
+import urllib.parse  
 import json
 
-# 1. データベース接続設定
+# 🚨 【最優先・絶対防衛圏】一番最初（何よりも前）にページ設定を実行する
+st.set_page_config(page_title="医学生専用ダッシュボード", layout="wide", page_icon="🩺")
+
+# 1. データベース接続設定 (st.set_page_config より後に実行するため安全)
 def get_connection():
     return psycopg2.connect(st.secrets["SUPABASE_URI"])
-
-st.set_page_config(page_title="医学生専用ダッシュボード", layout="wide", page_icon="🩺")
 
 def get_usd_jpy():
     # パターン1: yfinanceによる取得試行（マルチインデックス対策版）
@@ -49,7 +50,7 @@ def load_total_data():
     spreadsheet_id = "13dg65zF2hcsKe42QJ2Fqz9GfXryaw2En4hPJKLG_Yes"
     sheet_name = "統合（税金関連その他）"
     
-    # ★重要: 日本語をWeb安全な文字（%xx形式）に変換してasciiエラーを完全に防ぐ
+    # 日本語をWeb安全な文字（%xx形式）に変換してasciiエラーを完全に防ぐ
     encoded_sheet_name = urllib.parse.quote(sheet_name)
     url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/gviz/tq?tqx=out:csv&sheet={encoded_sheet_name}"
     
@@ -605,6 +606,7 @@ try:
         else:
             st.info("統合シートにまだデータが蓄積されていません。LINE BotからLyra実績や経費が登録されると自動生成されます。")
 
+    cur.execute("COMMIT") # トランザクション保護
     cur.close(); conn.close()
 
 except Exception as e:

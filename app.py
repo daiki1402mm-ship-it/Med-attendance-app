@@ -432,7 +432,7 @@ try:
         
         st.write("---")
         
-        # 2. リアルタイム投資戦略セクション（新規追加）
+        # 2. リアルタイム投資戦略セクション
         st.subheader("🛡️ 資産配分・現金余力マネジメント")
         st.caption("Project Lyraの純利益を元手に、現在の「リアルタイム投資可能余力」と「現物待機資金（フリーキャッシュ）」を自動算出します。")
         
@@ -442,6 +442,11 @@ try:
         cur.execute("SELECT amount FROM expenses")
         e_data = cur.fetchall()
         
+        # 新方式：investment_logsからこれまでの投資総額（累計額）をリアルタイムに自動合計する
+        cur.execute("SELECT amount FROM investment_logs")
+        i_logs_data = cur.fetchall()
+        actual_invested = sum([int(il['amount']) for il in i_logs_data]) if i_logs_data else 0
+        
         lyra_total = sum([float(r['amount_jpy']) for r in r_data]) if r_data else 0.0
         exp_total = sum([float(e['amount']) for e in e_data]) if e_data else 0.0
         
@@ -450,21 +455,18 @@ try:
         tax_stk = net_prof * 0.3 if net_prof > 0 else 0.0
         auto_investment_capacity = max(0.0, net_prof - tax_stk)
         
-        # DBから投資戦略の最新設定（1行）を取得
-        cur.execute("SELECT * FROM investment_strategies WHERE id = 1")
+        # DBから投資戦略の最新設定（目標・メモ）を取得
+        cur.execute("SELECT monthly_investment_target, strategy_notes FROM investment_strategies WHERE id = 1")
         strategy_res = cur.fetchone()
         
         if strategy_res:
-            actual_invested = strategy_res['actual_invested_amount']
             monthly_target = strategy_res['monthly_investment_target']
             notes = strategy_res['strategy_notes']
         else:
-            # 万が一データがなかった場合のセーフティ初期値
-            actual_invested = 0
             monthly_target = 0
             notes = '現金余力重視。チャンスを待つ。'
             
-        # 現在待機資金の自動計算 = 投資可能総余力 - 実際の現物投資額
+        # 現在待機資金の自動計算 = 投資可能総余力 - 投資ログの累計実績
         free_cash = auto_investment_capacity - actual_invested
         
         # KPIカードの横並び配置
@@ -472,7 +474,6 @@ try:
         col_inv1.metric("総資産・投資可能総余力", f"¥{int(auto_investment_capacity):,}")
         col_inv2.metric("現物投資 累計実績", f"¥{int(actual_invested):,}")
         
-        # フリーキャッシュのハイライト表示（現金余力重視スタンスを視覚化）
         if free_cash > 0:
             col_inv3.metric("現在待機資金 (自由枠)", f"¥{int(free_cash):,}", "現物買いチャンス待機")
         else:
@@ -488,29 +489,23 @@ try:
         # 投資戦略の上書き・手動更新フォーム
         with st.form("investment_strategy_form"):
             st.markdown("✍️ **投資戦略・実績データの更新設定**")
-            st.caption("実際に証券口座で現物を買い付けた金額（累計）や、今月の積立目標、脳内戦略をここにアップデートしてください。")
+            st.caption("今月の積立目標や、脳内戦略メモをここにアップデートしてください。")
             
-            col_f_inv1, col_f_inv2 = st.columns(2)
-            with col_f_inv1:
-                new_invested = st.number_input("現物投資 累計実績 (円)", min_value=0, value=int(actual_invested), step=10000, help="今までに実際に株式やETFの購入に使った総額を入力します。")
-            with col_f_inv2:
-                new_target = st.number_input("今月の目標積立額 (円)", min_value=0, value=int(monthly_target), step=5000)
-                
+            new_target = st.number_input("今月の目標積立額 (円)", min_value=0, value=int(monthly_target), step=5000)
             new_notes = st.text_area("配分比率・戦略メモ", value=notes, placeholder="例: キャッシュ比率7割維持。150円以下で現物買い全力。")
             
             submit_strategy = st.form_submit_button("投資戦略を更新・スプレッドシートへ同期")
             
             if submit_strategy:
-                # Supabase側をUPDATE（常にid=1の行を書き換え）
+                # 累計額はログから自動集計されるため、ここでは目標とメモのみをUPDATE
                 cur.execute("""
-                    INSERT INTO investment_strategies (id, actual_invested_amount, monthly_investment_target, strategy_notes, updated_at)
-                    VALUES (1, %s, %s, %s, NOW())
+                    INSERT INTO investment_strategies (id, monthly_investment_target, strategy_notes, updated_at)
+                    VALUES (1, %s, %s, NOW())
                     ON CONFLICT (id) DO UPDATE SET 
-                        actual_invested_amount = EXCLUDED.actual_invested_amount,
                         monthly_investment_target = EXCLUDED.monthly_investment_target,
                         strategy_notes = EXCLUDED.strategy_notes,
                         updated_at = NOW()
-                """, (new_invested, new_target, new_notes.strip()))
+                """, (new_target, new_notes.strip()))
                 conn.commit()
                 st.success("✅ 投資戦略を更新しました！スプレッドシートの『投資戦略』シートへリアルタイム自動同期がトリガーされました。")
                 st.rerun()

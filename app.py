@@ -1,4 +1,5 @@
-import streamlit as st
+import os
+import re
 import psycopg2
 from psycopg2.extras import DictCursor
 import yfinance as yf 
@@ -7,6 +8,7 @@ import pytz
 import pandas as pd
 import re
 import urllib.request
+import urllib.parse  # 💡 URLエンコード用にインポートを追加
 import json
 
 # 1. データベース接続設定
@@ -41,15 +43,22 @@ def get_usd_jpy():
     except:
         return 0
 
-# 💡 CSV経由で「統合（税金関連その他）」シートをロードする関数
+# 💡 日本語シート名エラーを完全に克服した修正版ロード関数
 @st.cache_data(ttl=10)
 def load_total_data():
     spreadsheet_id = "13dg65zF2hcsKe42QJ2Fqz9GfXryaw2En4hPJKLG_Yes"
     sheet_name = "統合（税金関連その他）"
-    url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/gviz/tq?tqx=out:csv&sheet={sheet_name}"
+    
+    # ★重要: 日本語をWeb安全な文字（%xx形式）に変換してasciiエラーを完全に防ぐ
+    encoded_sheet_name = urllib.parse.quote(sheet_name)
+    url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/gviz/tq?tqx=out:csv&sheet={encoded_sheet_name}"
+    
     try:
-        df = pd.read_csv(url)
-        return df
+        # サーバーエラーを避けるためにブラウザのフリをするヘッダーを付与
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req) as response:
+            df = pd.read_csv(response)
+            return df
     except Exception as e:
         st.error(f"統合シートの読み込みに失敗しました: {e}")
         return pd.DataFrame()
@@ -62,7 +71,7 @@ try:
     conn = get_connection()
     cur = conn.cursor(cursor_factory=DictCursor)
 
-    # ★ページ選択肢に「全体統合アナリティクス」を追加
+    # ページ選択肢
     page = st.sidebar.radio("ページ選択", ["ダッシュボード", "為替分析・円転戦略", "全体統合アナリティクス"])
     st.sidebar.divider()
     # --- サイドバー：設定・進級管理 ---

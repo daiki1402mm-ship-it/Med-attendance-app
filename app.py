@@ -112,7 +112,7 @@ try:
 
         st.divider()
 
-        # タブ表示（「給与実績」から「収支・給与実績」へ拡張）
+        # タブ表示
         tab1, tab2, tab3, tab4, tab5 = st.tabs(["🗓 本日の予定", "📝 提出物", "⚖️ 試験日程", "💰 収支・給与実績", "🚀 一括登録"])
 
         # --- タブ1: 本日の予定（講義 ＋ プライベート） ---
@@ -193,44 +193,34 @@ try:
             if exams: st.table(pd.DataFrame([dict(e) for e in exams])[['exam_date', 'subject_name', 'location']])
             else: st.info("試験予定なし")
 
-        # --- タブ4: 💰 収支・給与実績（旧 給与実績） ---
+        # --- タブ4: 💰 収支・給与実績 ---
         with tab4:
             st.subheader("🚀 Project Lyra 収益・経費・純利益サマリー")
             
-            # データ取得：報酬
             cur.execute("SELECT * FROM lyra_rewards ORDER BY date DESC")
             lyra_data = cur.fetchall()
             
-            # データ取得：経費（新規追加）
             cur.execute("SELECT * FROM expenses ORDER BY date DESC")
             expense_data = cur.fetchall()
             
             df_lyra = pd.DataFrame([dict(r) for r in lyra_data]) if lyra_data else pd.DataFrame()
             df_exp = pd.DataFrame([dict(e) for e in expense_data]) if expense_data else pd.DataFrame()
             
-            # 数値の計算処理（型エラーの完全な防衛）
             total_jpy = float(df_lyra['amount_jpy'].sum()) if not df_lyra.empty else 0.0
             latest_jpy = float(df_lyra.iloc[0]['amount_jpy']) if not df_lyra.empty else 0.0
             total_exp = float(df_exp['amount'].sum()) if not df_exp.empty else 0.0
             
-            # 純利益（Net Profit）の算出
             net_profit = total_jpy - total_exp
             profit_rate = (net_profit / total_jpy * 100) if total_jpy > 0 else 0.0
             
-            # 最上部に統合収支KPIカードを配置
             c_kpi1, c_kpi2, c_kpi3, c_kpi4 = st.columns(4)
             c_kpi1.metric("総報酬 (円)", f"¥{int(total_jpy):,}")
             c_kpi2.metric("総経費 (累計)", f"¥{int(total_exp):,}")
-            
-            # 純利益カード（経費が上回っていれば赤、利益が出ていれば緑っぽく表現）
             c_kpi3.metric("現在純利益", f"¥{int(net_profit):,}", f"利益率 {profit_rate:.1f}%")
-            # 納税ストックは純利益ベースでの計算（30%）に変更可能ですが、手堅く「報酬ベース」のまま、または実態に合わせて調整可能。
-            # 今回は手堅く「純利益の30%」として算出（※お好みに合わせて変更可能）
             c_kpi4.metric("納税ストック(利益ベース30%)", f"¥{int(max(0.0, net_profit * 0.3)):,}", f"当日分予定: ¥{int(latest_jpy * 0.3):,}")
             
             st.write("---")
             
-            # グラフと報酬テーブルの表示
             col_graph_reward, col_graph_expense = st.columns(2)
             
             with col_graph_reward:
@@ -245,15 +235,13 @@ try:
             with col_graph_expense:
                 st.markdown("📊 **経費カテゴリ比率**")
                 if not df_exp.empty:
-                    # カテゴリごとの合計を計算してドーナツチャート化
                     df_exp_grouped = df_exp.groupby('category')['amount'].sum().reset_index()
-                    st.bar_chart(df_exp_grouped.set_index('category')['amount']) # Streamlit標準バーチャート
+                    st.bar_chart(df_exp_grouped.set_index('category')['amount'])
                     st.caption("🧾 経費明細（直近）")
                     st.dataframe(df_exp[['date', 'category', 'amount', 'detail']], use_container_width=True)
                 else:
                     st.info("経費データがありません。")
 
-            # Project Lyra 報酬の手動登録フォーム
             st.write("---")
             col_form1, col_form2 = st.columns(2)
             
@@ -327,7 +315,6 @@ try:
                 df_all = pd.DataFrame([dict(r) for r in all_work])
                 df_all['月'] = pd.to_datetime(df_all['work_date']).dt.month
                 
-                # ピボットテーブル作成
                 pivot_table = df_all.pivot_table(
                     index='job_name', 
                     columns='月', 
@@ -351,10 +338,8 @@ try:
                 c_met1.metric(f"{today.month}月の総収入", f"¥{int(m_total):,}")
                 c_met2.metric(f"{today.year}年の総計", f"¥{int(y_total):,}")
 
-            # 月を選択して稼働実績を確認できるセクション
             st.divider()
             st.subheader("🗓 月別・稼働実績の確認")
-            st.caption("確認したい年月を選択してください。その月に働いた日と時間が一覧表示されます。")
             
             col_y, col_m = st.columns([1, 1])
             with col_y:
@@ -381,10 +366,8 @@ try:
             else:
                 st.info(f"{view_year}年{view_month}月の稼働実績はありません。")
 
-            # 過去・その他給与の手入力フォーム
             st.divider()
             st.subheader("✍️ 過去・その他給与の手入力")
-            st.caption("💡 ヒント：3月分など「月ごとの給与」を入力する場合は、その月の末日（3/31など）を選択してください。週ごとなら週末を選ぶと集計がきれいにまとまります。")
             
             with st.form("manual_salary_form"):
                 col_d, col_j, col_a = st.columns([1, 1, 1])
@@ -431,25 +414,109 @@ try:
                     conn.commit(); st.success(f"✅ {count}件登録！"); st.rerun()
 
     # ==========================================
-    # 為替分析ページ
+    # 為替分析・投資戦略ページ（★大幅拡張・統合）
     # ==========================================
     elif page == "為替分析・円転戦略":
-        st.title("💱 為替分析・円転戦略")
-        rate = get_usd_jpy()
+        st.title("💱 為替分析 ＆ 📊 Lyra投資戦略コックピット")
         
-        # もしレートが0円の場合のフォールバック表示
+        # 1. 為替セクション
+        rate = get_usd_jpy()
         if rate == 0:
             st.error("データの取得に失敗しました。時間をおいて再読み込みするか、SBI証券等のアプリで直接レートをご確認ください。")
         else:
             st.metric("現在のドル円レート", f"1 USD = {rate:.2f} JPY")
-            
             if rate >= 160:
                 st.error("⚠️ 介入警戒ライン(160円)到達！円転の好機かもしれません。")
             elif rate >= 155:
                 st.warning("👀 監視域：円安傾向です。")
         
         st.write("---")
-        st.write("### 戦略メモ")
+        
+        # 2. リアルタイム投資戦略セクション（新規追加）
+        st.subheader("🛡️ 資産配分・現金余力マネジメント")
+        st.caption("Project Lyraの純利益を元手に、現在の「リアルタイム投資可能余力」と「現物待機資金（フリーキャッシュ）」を自動算出します。")
+        
+        # 投資原資となるLyraのデータを集計
+        cur.execute("SELECT amount_jpy FROM lyra_rewards")
+        r_data = cur.fetchall()
+        cur.execute("SELECT amount FROM expenses")
+        e_data = cur.fetchall()
+        
+        lyra_total = sum([float(r['amount_jpy']) for r in r_data]) if r_data else 0.0
+        exp_total = sum([float(e['amount']) for e in e_data]) if e_data else 0.0
+        
+        # 投資可能総余力の自動計算 (純利益 - 納税30%)
+        net_prof = lyra_total - exp_total
+        tax_stk = net_prof * 0.3 if net_prof > 0 else 0.0
+        auto_investment_capacity = max(0.0, net_prof - tax_stk)
+        
+        # DBから投資戦略の最新設定（1行）を取得
+        cur.execute("SELECT * FROM investment_strategies WHERE id = 1")
+        strategy_res = cur.fetchone()
+        
+        if strategy_res:
+            actual_invested = strategy_res['actual_invested_amount']
+            monthly_target = strategy_res['monthly_investment_target']
+            notes = strategy_res['strategy_notes']
+        else:
+            # 万が一データがなかった場合のセーフティ初期値
+            actual_invested = 0
+            monthly_target = 0
+            notes = '現金余力重視。チャンスを待つ。'
+            
+        # 現在待機資金の自動計算 = 投資可能総余力 - 実際の現物投資額
+        free_cash = auto_investment_capacity - actual_invested
+        
+        # KPIカードの横並び配置
+        col_inv1, col_inv2, col_inv3, col_inv4 = st.columns(4)
+        col_inv1.metric("総資産・投資可能総余力", f"¥{int(auto_investment_capacity):,}")
+        col_inv2.metric("現物投資 累計実績", f"¥{int(actual_invested):,}")
+        
+        # フリーキャッシュのハイライト表示（現金余力重視スタンスを視覚化）
+        if free_cash > 0:
+            col_inv3.metric("現在待機資金 (自由枠)", f"¥{int(free_cash):,}", "現物買いチャンス待機")
+        else:
+            col_inv3.metric("現在待機資金 (自由枠)", f"¥{int(free_cash):,}", "余力なし・入金待ち", delta_color="inverse")
+            
+        col_inv4.metric("今月の目標積立額", f"¥{int(monthly_target):,}")
+        
+        # 戦略メモボードの描画
+        st.info(f"💡 **現在の配分比率・戦略メモ**\n\n{notes}")
+        
+        st.write("---")
+        
+        # 投資戦略の上書き・手動更新フォーム
+        with st.form("investment_strategy_form"):
+            st.markdown("✍️ **投資戦略・実績データの更新設定**")
+            st.caption("実際に証券口座で現物を買い付けた金額（累計）や、今月の積立目標、脳内戦略をここにアップデートしてください。")
+            
+            col_f_inv1, col_f_inv2 = st.columns(2)
+            with col_f_inv1:
+                new_invested = st.number_input("現物投資 累計実績 (円)", min_value=0, value=int(actual_invested), step=10000, help="今までに実際に株式やETFの購入に使った総額を入力します。")
+            with col_f_inv2:
+                new_target = st.number_input("今月の目標積立額 (円)", min_value=0, value=int(monthly_target), step=5000)
+                
+            new_notes = st.text_area("配分比率・戦略メモ", value=notes, placeholder="例: キャッシュ比率7割維持。150円以下で現物買い全力。")
+            
+            submit_strategy = st.form_submit_button("投資戦略を更新・スプレッドシートへ同期")
+            
+            if submit_strategy:
+                # Supabase側をUPDATE（常にid=1の行を書き換え）
+                cur.execute("""
+                    INSERT INTO investment_strategies (id, actual_invested_amount, monthly_investment_target, strategy_notes, updated_at)
+                    VALUES (1, %s, %s, %s, NOW())
+                    ON CONFLICT (id) DO UPDATE SET 
+                        actual_invested_amount = EXCLUDED.actual_invested_amount,
+                        monthly_investment_target = EXCLUDED.monthly_investment_target,
+                        strategy_notes = EXCLUDED.strategy_notes,
+                        updated_at = NOW()
+                """, (new_invested, new_target, new_notes.strip()))
+                conn.commit()
+                st.success("✅ 投資戦略を更新しました！スプレッドシートの『投資戦略』シートへリアルタイム自動同期がトリガーされました。")
+                st.rerun()
+
+        st.write("---")
+        st.subheader("📌 為替戦略メモ")
         st.write("・片山財務大臣の介入示唆：160円を超えると介入の可能性大。")
         st.write("・3-8円程度の急激な円高反落を狙った円転タイミングを検討してください。")
 

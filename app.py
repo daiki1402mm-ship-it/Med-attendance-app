@@ -145,7 +145,7 @@ try:
 
             col_lec, col_life = st.columns([3, 2])
             with col_lec:
-                st.subheader("📚 大学の講義")
+                st.subheader("📚 大学的講義")
                 if not lectures: st.info("講義予定なし")
                 else:
                     occ = {str(r['period']) for r in lectures if r['status'] not in ['休講', '欠席'] and not any(k in r['subject_name'] for k in ["休み", "休講", "祭"])}
@@ -375,33 +375,76 @@ try:
                 st.info(f"{view_year}年{view_month}月の稼働実績はありません。")
 
             st.divider()
-            st.subheader("✍️ 過去・その他給与の手入力")
-            with st.form("manual_salary_form"):
-                col_d, col_j, col_a = st.columns([1, 1, 1])
-                with col_d:
-                    manual_date = st.date_input("日付を選択", value=today)
-                with col_j:
-                    job_sel = st.selectbox("バイト名", ["東進", "Welocalize", "ファミマ", "トライ(講師)", "トライ(事務)", "単発", "その他(直接入力)"])
-                with col_a:
+            st.subheader("🛡️ 過去・その他給与の実績登録")
+            
+            # 💡 フォームの枠の外で状態を管理するためのセレクトボックス
+            job_sel = st.selectbox("バイト名", ["東進 (2万行自動電卓)", "Welocalize", "ファミマ", "トライ(講師)", "トライ(事務)", "単発", "その他(直接入力)"])
+            
+            with st.form("manual_salary_form_upgraded"):
+                manual_date = st.date_input("日付を選択", value=today)
+                
+                # 東進が選ばれている場合は、LINEと同じ直貼り解析モードを起動
+                if job_sel == "東進 (2万行自動電卓)":
+                    st.markdown("📋 **東進コピペ直貼り解析エリア**")
+                    toshin_input_text = st.text_area(
+                        "LINEに貼るテキスト（.pdfが含まれる文章）をそのままここに貼り付けてください",
+                        placeholder="030830140146676678.pdf 早稲田大学教育学部...\n020930190260957506.pdf 早稲田大学商学部...",
+                        height=120
+                    )
+                    manual_amount = 0 # 自動計算されるためフォーム上は非表示
+                else:
                     manual_amount = st.number_input("金額 (円)", min_value=0, step=1000)
+                    toshin_input_text = ""
                     
-                manual_job_custom = st.text_input("※「その他」を選んだ場合のみ、ここにバイト名を入力", "")
-                submit_manual = st.form_submit_button("給与実績を登録")
+                manual_job_custom = st.text_input("※「その他(直接入力)」を選んだ場合のみ、ここにバイト名を入力", "")
+                submit_manual = st.form_submit_button("給与実績をデータベースへ登録")
                 
                 if submit_manual:
-                    final_job_name = manual_job_custom if job_sel == "その他(直接入力)" else job_sel
+                    final_job_name = manual_job_custom if job_sel == "その他(直接入力)" else "東進" if job_sel == "東進 (2万行自動電卓)" else job_sel
+                    
                     if final_job_name.strip() == "":
                         st.error("バイト名を入力してください。")
-                    elif manual_amount <= 0:
+                    elif job_sel == "東進 (2万行自動電卓)" and not toshin_input_text.strip():
+                        st.error("東進のテキストを入力してください。")
+                    elif job_sel != "東進 (2万行自動電卓)" and manual_amount <= 0:
                         st.error("0円以上の金額を入力してください。")
                     else:
-                        cur.execute(
-                            "INSERT INTO work_results (job_name, work_date, pay_amount) VALUES (%s, %s, %s)",
-                            (final_job_name.strip(), manual_date.isoformat(), manual_amount)
-                        )
-                        conn.commit()
-                        st.success(f"✅ {manual_date.strftime('%m/%d')}の「{final_job_name}」に ¥{manual_amount:,} を登録しました！")
-                        st.rerun()
+                        calc_amount = manual_amount
+                        
+                        # 🚀【東進直貼り自動電卓エンジン】Streamlit側でも2万行から1秒でパース＆自動計算
+                        if job_sel == "東進 (2万行自動電卓)":
+                            toshin_lines = toshin_input_text.split('\n')
+                            target_exams = []
+                            for t_line in toshin_lines:
+                                t_line = t_line.strip()
+                                if ".pdf" in t_line:
+                                    exam_match = re.search(r'\.pdf\s+(.+?)(?:\s+未添削|\s+削除|\s+添削|$)', t_line)
+                                    if exam_match:
+                                        target_exams.append(exam_match.group(1).strip())
+                            
+                            if target_exams:
+                                format_strings = ', '.join(['%s'] * len(target_exams))
+                                # 大文字小文字の区別防衛のために "Toshin_wages" をダブクォで囲みます
+                                cur.execute(f'SELECT exam_name, price FROM "Toshin_wages" WHERE exam_name IN ({format_strings})', tuple(target_exams))
+                                price_rows = cur.fetchall()
+                                db_price_map = {row[0]: int(row[1]) for row in price_rows}
+                                
+                                for exam in target_exams:
+                                    calc_amount += db_price_map.get(exam, 50) # マスタになければ安全策で50円
+                            else:
+                                calc_amount = 0
+                        
+                        if job_sel == "東進 (2万行自動電卓)" and calc_amount == 0:
+                            st.error("有効な東進データ（.pdfの行）が検出できませんでした。")
+                        else:
+                            # work_resultsへのシュート（GAS側にも自動で1行圧縮されて着弾します）
+                            cur.execute(
+                                "INSERT INTO work_results (job_name, work_date, pay_amount, raw_text) VALUES (%s, %s, %s, %s)",
+                                (final_job_name.strip(), manual_date.isoformat(), calc_amount, toshin_input_text.strip() if toshin_input_text else None)
+                            )
+                            conn.commit()
+                            st.success(f"✅ {manual_date.strftime('%m/%d')}の実績として「{final_job_name}」に ¥{calc_amount:,} を自動計算で登録しました！")
+                            st.rerun()
 
         # --- タブ5: 一括登録 ---
         with tab5:

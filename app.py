@@ -14,6 +14,16 @@ import json
 # 🚨 一番最初（何よりも前）にページ設定を実行する
 st.set_page_config(page_title="医学生専用ダッシュボード", layout="wide", page_icon="🩺")
 
+# 📱 iPadの分割メニュー（…）との衝突を回避するため、左上のトグルボタンを25ピクセル下にずらすハック
+st.markdown("""
+    <style>
+        /* 左上の開閉トグルボタン（スピナー）の位置を調整 */
+        [data-testid="stSidebarCollapseButton"] {
+            margin-top: 25px !important;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
 # 1. データベース接続設定
 def get_connection():
     return psycopg2.connect(st.secrets["SUPABASE_URI"])

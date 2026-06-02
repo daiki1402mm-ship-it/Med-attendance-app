@@ -145,7 +145,7 @@ try:
 
             col_lec, col_life = st.columns([3, 2])
             with col_lec:
-                st.subheader("📚 大学的講義")
+                st.subheader("📚 本日の講義")
                 if not lectures: st.info("講義予定なし")
                 else:
                     occ = {str(r['period']) for r in lectures if r['status'] not in ['休講', '欠席'] and not any(k in r['subject_name'] for k in ["休み", "休講", "祭"])}

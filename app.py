@@ -14,17 +14,24 @@ import json
 # 🚨 一番最初（何よりも前）にページ設定を実行する
 st.set_page_config(page_title="医学生専用ダッシュボード", layout="wide", page_icon="🩺")
 
-# 📱 iPadの分割メニュー（…）との衝突を回避するため、左上のトグルボタンを35ピクセル下にずらすハック
+# 📱 iPadの分割メニュー（…）との衝突を回避するため、開閉トグルボタンを常時35ピクセル下にずらすハック
 st.markdown("""
     <style>
-        /* ボタン単体だけでなく、ボタンを格納している枠（コンテナ）ごと下に安全に押し下げます */
-        [data-testid="stSidebarCollapseButton"], 
-        .stSidebarCollapseButton,
-        [data-testid="stSidebar"] button {
+        /* ① サイドバーが【開いている】ときのボタンを押し下げる */
+        [data-testid="stSidebarCollapseButton"] {
             margin-top: 35px !important;
+        }
+        /* ② サイドバーが【閉じている】ときの最左上のボタン枠ごと強制的に押し下げる */
+        [data-testid="stHeader"] {
+            padding-top: 35px !important;
+        }
+        /* ③ ヘッダー全体の高さを調整してロゴやタイトルとのバランスをキープする */
+        [data-testid="stAppViewContainer"] {
+            padding-top: 35px !important;
         }
     </style>
 """, unsafe_allow_html=True)
+
 
 
 # 1. データベース接続設定

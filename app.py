@@ -10,6 +10,8 @@ import pandas as pd
 import urllib.request
 import urllib.parse  
 import json
+# 🌟 カレンダーコンポーネントのインポート
+from streamlit_calendar import calendar
 
 # 🚨 一番最初（何よりも前）にページ設定を実行する
 st.set_page_config(page_title="医学生専用ダッシュボード", layout="wide", page_icon="🩺")
@@ -32,11 +34,9 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-
-
 # 1. データベース接続設定
 def get_connection():
-    return psycopg2.connect(st.secrets["SUPABASE_URI"])
+    return psycopg2.connect(os.environ.get("SUPABASE_URI") if "SUPABASE_URI" in os.environ else st.secrets["SUPABASE_URI"])
 
 def get_usd_jpy():
     try:
@@ -88,8 +88,8 @@ try:
     conn = get_connection()
     cur = conn.cursor(cursor_factory=DictCursor)
 
-    # ページ選択肢
-    page = st.sidebar.radio("ページ選択", ["ダッシュボード", "為替分析・円転戦略", "全体統合アナリティクス"])
+    # 🌟 ページ選択肢に「🗓️ 月間スケジュール」を追加
+    page = st.sidebar.radio("ページ選択", ["ダッシュボード", "🗓️ 月間スケジュール", "為替分析・円転戦略", "全体統合アナリティクス"])
     st.sidebar.divider()
     # --- サイドバー：設定・進級管理 ---
     st.sidebar.title("⚙️ 設定・進級管理")
@@ -483,6 +483,102 @@ try:
                     conn.commit(); st.success(f"✅ {count}件登録！"); st.rerun()
 
     # ==========================================
+    # 👑 新設ページ：🗓️ 月間スケジュール
+    # ==========================================
+    elif page == "🗓️ 月間スケジュール":
+        st.title("🗓️ 月間スケジュール・コックピット")
+        st.caption("バイト・私生活の予定、大学の試験日程、CBT等の重要イベントをマージした統合カレンダービューです。")
+        st.write("---")
+
+        calendar_events = []
+
+        # ① プライベート・バイト予定（lifestyle_schedules）の取得とマッピング
+        cur.execute("""
+            SELECT event_date, start_time, end_time, detail, category, sub_category 
+            FROM lifestyle_schedules 
+            WHERE event_date >= CURRENT_DATE - INTERVAL '3 month'
+              AND event_date <= CURRENT_DATE + INTERVAL '6 month'
+        """)
+        for row in cur.fetchall():
+            start_str = f"{row['event_date']}T{row['start_time']}" if row['start_time'] else str(row['event_date'])
+            end_str = f"{row['event_date']}T{row['end_time']}" if row['end_time'] else None
+            
+            # 識別用のスマート色分け（ファミマ、トライ、プライベートなど）
+            if row['sub_category'] == 'famima':
+                color = "#2ecc71"  # ファミマグリーン
+            elif row['sub_category'] == 'try':
+                color = "#3498db"  # トライブルー
+            elif row['category'] == 'part_time':
+                color = "#1abc9c"  # その他バイト
+            else:
+                color = "#9b59b6"  # プライベート紫
+
+            calendar_events.append({
+                "title": row['detail'],
+                "start": start_str,
+                "end": end_str,
+                "color": color,
+                "allDay": False if row['start_time'] else True
+            })
+
+        # ② 大学定期試験（exams）の取得とマッピング
+        cur.execute("SELECT exam_date, subject_name, location FROM exams")
+        for row in cur.fetchall():
+            loc_str = f" (📍{row['location']})" if row['location'] else ""
+            calendar_events.append({
+                "title": f"🚨【試験】{row['subject_name']}{loc_str}",
+                "start": str(row['exam_date']),
+                "color": "#e74c3c",  # 警告の赤
+                "allDay": True
+            })
+
+        # ③ マスタ重要イベント（CBT日程カウントダウン用全日フラグ）
+        if current_cbt:
+            calendar_events.append({
+                "title": "⚔️【重要】CBT 本番当日",
+                "start": current_cbt.isoformat(),
+                "color": "#e67e22",  # 燃えるオレンジ
+                "allDay": True
+            })
+
+        # --- iPad横画面/Split ViewにジャストフィットするFullCalendar設定 ---
+        calendar_options = {
+            "editable": False,
+            "selectable": True,
+            "headerToolbar": {
+                "left": "prev,next today",
+                "center": "title",
+                "right": "dayGridMonth,timeGridWeek"
+            },
+            "initialView": "dayGridMonth",
+            "locale": "ja",
+            "firstDay": 1,  # 医学生の週次サイクルに合わせた月曜始まり
+            "buttonText": {
+                "today": "今日",
+                "month": "月",
+                "week": "週"
+            },
+            "height": "700px"  # iPadの画面にスクロールなしで綺麗に収まる設計
+        }
+
+        # カレンダーの描画実行
+        state = calendar(
+            events=calendar_events,
+            options=calendar_options,
+            key="dashboard_integrated_calendar"
+        )
+        
+        # 凡例表示（スマートインフォ）
+        st.write("---")
+        st.markdown("""
+        **🎨 カラー凡例:** <span style='background-color:#2ecc71; padding:2px 8px; border-radius:3px; color:white; font-size:12px;'>ファミマ</span> 
+        <span style='background-color:#3498db; padding:2px 8px; border-radius:3px; color:white; font-size:12px;'>トライ</span> 
+        <span style='background-color:#9b59b6; padding:2px 8px; border-radius:3px; color:white; font-size:12px;'>プライベート</span> 
+        <span style='background-color:#e74c3c; padding:2px 8px; border-radius:3px; color:white; font-size:12px;'>定期試験</span> 
+        <span style='background-color:#e67e22; padding:2px 8px; border-radius:3px; color:white; font-size:12px;'>CBT/OSCE重要期日</span>
+        """, unsafe_allow_html=True)
+
+    # ==========================================
     # 為替分析・投資戦略ページ
     # ==========================================
     elif page == "為替分析・円転戦略":
@@ -567,7 +663,7 @@ try:
     # ==========================================
     elif page == "全体統合アナリティクス":
         st.title("🦅 全体統合財務アナリティクス")
-        st.caption("Lyra報酬、経費、各種バイト代をすべて月別に集計した個人最高財務責任者（CFO）コックピット画面です。")
+        st.caption("Lyra報酬、経費、各種バイト代をすべて月別に集費した個人最高財務責任者（CFO）コックピット画面です。")
         st.write("---")
         
         df_total = load_total_data()

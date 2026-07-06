@@ -5,3 +5,4 @@ pandas
 yfinance
 line-bot-sdk
 cryptography
+streamlit-calendar==0.1.3

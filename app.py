@@ -34,9 +34,9 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# 1. データベース接続設定
+# 1. データベース接続設定（元の動いていた形に完全復帰）
 def get_connection():
-    return psycopg2.connect(os.environ.get("SUPABASE_URI") if "SUPABASE_URI" in os.environ else st.secrets["SUPABASE_URI"])
+    return psycopg2.connect(st.secrets["SUPABASE_URI"])
 
 def get_usd_jpy():
     try:
